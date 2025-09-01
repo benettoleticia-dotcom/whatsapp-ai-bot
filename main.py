@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -251,6 +250,15 @@ class WhatsAppBotIntelligent:
                 
         return current
 
+    def select_product(self, profile: ClientProfile) -> str:
+        """Seleciona produto baseado no perfil"""
+        if profile.conversion_score > 0.8:
+            return "vip"
+        elif profile.conversion_score > 0.6:
+            return "premium"  
+        else:
+            return "basic"
+
     def generate_intelligent_response(self, phone: str, message: str) -> str:
         """Gera resposta inteligente sem IA externa"""
         
@@ -339,15 +347,6 @@ class WhatsAppBotIntelligent:
         # Resposta padrão
         return "Me conta mais, amor... 😘"
 
-    def select_product(self, profile: ClientProfile) -> str:
-        """Seleciona produto baseado no perfil"""
-        if profile.conversion_score > 0.8:
-            return "vip"
-        elif profile.conversion_score > 0.6:
-            return "premium"  
-        else:
-            return "basic"
-
     async def send_whatsapp_message(self, phone: str, message: str) -> bool:
         """Envia mensagem via Maytapi"""
         url = f"https://api.maytapi.com/api/{self.whatsapp_product_id}/{self.whatsapp_phone_id}/sendMessage"
@@ -357,10 +356,10 @@ class WhatsAppBotIntelligent:
             "Content-Type": "application/json"
         }
         
-        # Limpa número
+        # Limpa número - CORRIGIDO para o número certo
         clean_phone = re.sub(r'[^\d]', '', phone)
-        if not clean_phone.startswith('55'):
-            clean_phone = f"55{clean_phone}"
+        if not clean_phone.startswith('5542'):
+            clean_phone = f"5542{clean_phone}"
         
         payload = {
             "to_number": clean_phone,
@@ -478,54 +477,124 @@ class MaytapiWebhook(BaseModel):
 
 @app.post("/webhook")
 async def receive_message(request: Request):
-    """Recebe mensagens do Maytapi - aceita qualquer formato"""
+    """Recebe mensagens do Maytapi - formato específico baseado nos logs"""
     try:
         # Pega dados brutos da requisição
         raw_data = await request.json()
-        logger.info(f"📨 Dados recebidos do webhook: {raw_data}")
+        logger.info(f"📨 Dados recebidos do webhook: {json.dumps(raw_data, indent=2)}")
         
-        # Tenta extrair informações de diferentes formatos possíveis
+        # Extrai informações baseado no formato real do Maytapi (visto nos logs)
         phone = None
         message = None
         message_type = None
         
-        # Formato 1: {type: "message", data: {...}}
-        if "type" in raw_data and raw_data["type"] == "message" and "data" in raw_data:
-            data = raw_data["data"]
-            phone = data.get("fromNumber") or data.get("from") or data.get("phone")
-            message = data.get("message") or data.get("text") or data.get("body")
-            message_type = data.get("type") or data.get("messageType")
-            
-        # Formato 2: dados diretos na raiz
-        elif "fromNumber" in raw_data or "from" in raw_data:
-            phone = raw_data.get("fromNumber") or raw_data.get("from") or raw_data.get("phone")
-            message = raw_data.get("message") or raw_data.get("text") or raw_data.get("body")
-            message_type = raw_data.get("type") or raw_data.get("messageType") or "text"
-            
-        # Formato 3: estrutura aninhada diferente
-        elif "messages" in raw_data:
-            for msg in raw_data["messages"]:
-                phone = msg.get("fromNumber") or msg.get("from") or msg.get("phone")
-                message = msg.get("message") or msg.get("text") or msg.get("body")
-                message_type = msg.get("type") or msg.get("messageType") or "text"
+        # Formato específico do Maytapi baseado nos logs
+        # Procura por diferentes campos possíveis que aparecem nos logs
+        
+        # 1. Tenta extrair telefone de vários campos possíveis
+        phone_fields = ["phone", "fromNumber", "from", "receiver", "user"]
+        for field in phone_fields:
+            if field in raw_data and raw_data[field]:
+                phone = str(raw_data[field])
                 break
-                
-        # Log para debug
-        logger.info(f"📱 Extraído: phone={phone}, message={message}, type={message_type}")
+        
+        # 2. Se não encontrou na raiz, procura em objetos aninhados
+        if not phone:
+            for key, value in raw_data.items():
+                if isinstance(value, dict):
+                    for phone_field in phone_fields:
+                        if phone_field in value and value[phone_field]:
+                            phone = str(value[phone_field])
+                            break
+                    if phone:
+                        break
+        
+        # 3. Tenta extrair mensagem de vários campos possíveis
+        message_fields = ["text", "message", "body", "content"]
+        for field in message_fields:
+            if field in raw_data and raw_data[field]:
+                if isinstance(raw_data[field], str):
+                    message = raw_data[field]
+                    break
+                elif isinstance(raw_data[field], dict) and "text" in raw_data[field]:
+                    message = raw_data[field]["text"]
+                    break
+        
+        # 4. Se não encontrou na raiz, procura em objetos aninhados
+        if not message:
+            for key, value in raw_data.items():
+                if isinstance(value, dict):
+                    for msg_field in message_fields:
+                        if msg_field in value and value[msg_field]:
+                            if isinstance(value[msg_field], str):
+                                message = value[msg_field]
+                                break
+                    if message:
+                        break
+        
+        # 5. Procura por arrays de mensagens
+        if not message:
+            arrays_to_check = ["messages", "data", "items"]
+            for array_name in arrays_to_check:
+                if array_name in raw_data and isinstance(raw_data[array_name], list):
+                    for item in raw_data[array_name]:
+                        if isinstance(item, dict):
+                            for msg_field in message_fields:
+                                if msg_field in item and item[msg_field]:
+                                    message = str(item[msg_field])
+                                    break
+                            if message:
+                                break
+                if message:
+                    break
+        
+        # 6. Determina tipo da mensagem
+        type_fields = ["type", "messageType", "msgType"]
+        for field in type_fields:
+            if field in raw_data:
+                message_type = raw_data[field]
+                break
+        
+        # Se não encontrou, assume texto
+        if not message_type:
+            message_type = "text"
+            
+        # Log detalhado para debug
+        logger.info(f"📱 Análise completa:")
+        logger.info(f"   - Phone extraído: {phone}")
+        logger.info(f"   - Message extraída: {message}")
+        logger.info(f"   - Type: {message_type}")
         
         # Processa se temos dados válidos
-        if phone and message and (message_type == "text" or not message_type):
-            # Remove caracteres especiais do telefone
-            clean_phone = phone.replace("+", "").replace("-", "").replace(" ", "")
-            await bot.process_incoming_message(clean_phone, message)
-            logger.info(f"✅ Mensagem processada com sucesso: {clean_phone}")
-        else:
-            logger.warning(f"⚠️ Dados insuficientes para processar: phone={phone}, message={message}")
+        if phone and message and (message_type == "text" or "text" in str(message_type).lower()):
+            # Limpa o telefone - garante que tenha formato correto
+            clean_phone = re.sub(r'[^\d]', '', str(phone))
             
-        return {"status": "success", "received": True}
+            # Se não tem código do país, adiciona 55 (Brasil)
+            if len(clean_phone) == 11 and clean_phone.startswith('42'):
+                clean_phone = f"55{clean_phone}"
+            elif len(clean_phone) == 10 and clean_phone.startswith('42'):
+                clean_phone = f"5542{clean_phone}"
+            elif not clean_phone.startswith('55'):
+                clean_phone = f"55{clean_phone}"
+                
+            logger.info(f"📞 Telefone limpo: {clean_phone}")
+            
+            # Processa a mensagem
+            await bot.process_incoming_message(clean_phone, str(message))
+            logger.info(f"✅ Mensagem processada com sucesso para {clean_phone}")
+            
+        else:
+            logger.warning(f"⚠️ Dados insuficientes para processar:")
+            logger.warning(f"   - Phone: {phone} (válido: {bool(phone)})")
+            logger.warning(f"   - Message: {message} (válido: {bool(message)})")
+            logger.warning(f"   - Type: {message_type}")
+            
+        return {"status": "success", "received": True, "processed": bool(phone and message)}
         
     except Exception as e:
         logger.error(f"❌ Erro no webhook: {e}")
+        logger.error(f"Raw data: {raw_data}")
         # Retorna sucesso mesmo com erro para evitar reenvios do Maytapi
         return {"status": "error", "message": str(e), "received": True}
 
@@ -578,19 +647,19 @@ async def dashboard():
             <h2>🔧 Debug & Testes</h2>
             <div class="debug">
                 <strong>Webhook URL:</strong> /webhook<br>
-                <strong>WhatsApp Number:</strong> 554288388120<br>
+                <strong>WhatsApp Number:</strong> +55 42 98838-8120<br>
                 <strong>Maytapi Product ID:</strong> {WHATSAPP_PRODUCT_ID}<br>
                 <strong>Phone ID:</strong> {WHATSAPP_PHONE_ID}
             </div>
-            <p><a href="/test-message?phone=554288388120&message=oi" target="_blank">🧪 Testar: "oi"</a></p>
-            <p><a href="/test-message?phone=554288388120&message=tenho interesse" target="_blank">🧪 Testar: "tenho interesse"</a></p>
-            <p><a href="/test-message?phone=554288388120&message=quanto custa" target="_blank">🧪 Testar: "quanto custa"</a></p>
+            <p><a href="/test-message?phone=5542988388120&message=oi" target="_blank">🧪 Testar: "oi"</a></p>
+            <p><a href="/test-message?phone=5542988388120&message=tenho interesse" target="_blank">🧪 Testar: "tenho interesse"</a></p>
+            <p><a href="/test-message?phone=5542988388120&message=quanto custa" target="_blank">🧪 Testar: "quanto custa"</a></p>
             <p><a href="/analytics" target="_blank">📊 Analytics JSON</a></p>
         </div>
         
         <div class="card">
             <h2>📱 Como Testar no WhatsApp</h2>
-            <p>1. Mande mensagem para: <strong>+55 42 8838-8120</strong></p>
+            <p>1. Mande mensagem para: <strong>+55 42 98838-8120</strong></p>
             <p>2. Exemplo: "Oi tudo bem"</p>
             <p>3. A IA deve responder automaticamente</p>
             <p>4. Continue a conversa para testar o funil de vendas</p>
@@ -607,7 +676,7 @@ async def get_analytics():
     return bot.get_analytics()
 
 @app.get("/test-message")
-async def test_response(phone: str = "554288388120", message: str = "oi"):
+async def test_response(phone: str = "5542988388120", message: str = "oi"):
     """Testar resposta da IA"""
     try:
         response = bot.generate_intelligent_response(phone, message)
@@ -634,7 +703,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("✅ SEM OpenAI - 100% GRÁTIS")
     print("🧠 Lógica Inteligente Baseada nas Suas Técnicas")
-    print("📱 WhatsApp: Integrado via Maytapi")  
+    print("📱 WhatsApp: +55 42 98838-8120")  
     print("🎯 Taxa de Conversão Esperada: ~60%")
     print("=" * 60)
     print("🌐 Dashboard: http://localhost:8000")
