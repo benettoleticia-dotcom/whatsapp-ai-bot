@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Sistema de Atendente Virtual Inteligente para WhatsApp
-Criado para vendas de conteúdo adulto premium
+Atendente Virtual WhatsApp - Versão SEM OpenAI (Gratuita)
+Usa lógica inteligente baseada em suas técnicas de venda comprovadas
 """
 
 import asyncio
 import json
 import sqlite3
 import re
+import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from enum import Enum
-import openai
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import httpx
 import logging
@@ -24,7 +25,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # CONFIGURAÇÕES - SUAS CREDENCIAIS
-OPENAI_API_KEY = "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"
 WHATSAPP_TOKEN = "c9510ef0-09e6-4780-bb6a-72b137811069"
 WHATSAPP_PRODUCT_ID = "f38c3b76-29d1-4f85-ab4e-c3c911b7116c"
 WHATSAPP_PHONE_ID = "107677"
@@ -51,44 +51,81 @@ class ClientProfile:
     objections_raised: List[str] = field(default_factory=list)
     preferred_product: Optional[str] = None
 
-class WhatsAppAI:
+class WhatsAppBotIntelligent:
     def __init__(self):
-        self.openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
         self.whatsapp_token = WHATSAPP_TOKEN
         self.whatsapp_product_id = WHATSAPP_PRODUCT_ID
         self.whatsapp_phone_id = WHATSAPP_PHONE_ID
-        self.conversation_history: Dict[str, List[Dict]] = {}
+        self.conversation_history: Dict[str, List[str]] = {}
         self.client_profiles: Dict[str, ClientProfile] = {}
         
-        # Produtos disponíveis com seus links reais
+        # Produtos com seus links reais
         self.products = {
             "basic": {
                 "price": 19.90, 
                 "link": "https://buy.stripe.com/14k4iR16VdNk43mfZ5", 
-                "description": "Pacote básico - ideal para começar"
+                "description": "Pacote básico"
             },
             "premium": {
                 "price": 39.90, 
-                "link": "https://buy.stripe.com/premium-link-aqui", 
-                "description": "Pacote premium - mais conteúdo"
+                "link": "https://buy.stripe.com/premium-link", 
+                "description": "Pacote premium"
             },
             "vip": {
                 "price": 69.90, 
-                "link": "https://buy.stripe.com/vip-link-aqui", 
-                "description": "Pacote VIP - experiência completa"
-            },
-            "exclusive": {
-                "price": 100.00, 
-                "link": "https://buy.stripe.com/exclusive-link-aqui", 
-                "description": "Pacote exclusivo - tudo incluído"
+                "link": "https://buy.stripe.com/vip-link", 
+                "description": "Pacote VIP"
             }
         }
         
+        # Banco de respostas inteligentes baseadas nos seus exemplos
+        self.responses = {
+            "saudacoes": [
+                "Oi gatinho! Tudo bem? 😏",
+                "Olá amor, como está? 😘",
+                "Oi lindinho! Tudo joia? 😉",
+                "Ei gatinho, tudo bem por aí? 💋"
+            ],
+            "pergunta_origem": [
+                "De qual cidade você fala?",
+                "Você é de onde, gatinho?",
+                "Me conta, de que cidade você é?",
+                "De onde você está falando comigo?"
+            ],
+            "qualificacao": [
+                "O que mais te excita, amor?",
+                "Conta pra mim seus desejos... 😏",
+                "O que você mais gosta?",
+                "Me fala o que te deixa com tesão...",
+                "Já teve experiências especiais assim antes?",
+                "Aposto que você gosta de coisas especiais, né? 🔥"
+            ],
+            "interesse": [
+                "Sabia que trabalho com conteúdo bem especial para homens como você? 🔥",
+                "Tenho coisas que vão te deixar louco de tesão...",
+                "Quer conhecer meu lado mais safado? 😘",
+                "Trabalho com conteúdo exclusivo para clientes especiais como você",
+                "Tenho um material bem gostoso que você vai amar..."
+            ],
+            "objecoes_taxa": [
+                "É só assinar né gatinho, você vai virar meu cliente especial 😏",
+                "Não tem pegadinha nenhuma amor, não sou dessas",
+                "Não quero te roubar, só trabalhar... e te dar muito prazer 🔥",
+                "Se fosse golpe, pediria muito mais né amor"
+            ],
+            "fechamento": [
+                "Então gatinho, quer ser meu cliente especial? 💋",
+                "Vou te mostrar coisas que você nunca viu...",
+                "O link está aqui amor, me faz feliz? 😘",
+                "Caso queira, o link está aí gatinho"
+            ]
+        }
+        
         self.init_database()
-        logger.info("🤖 Sistema WhatsApp AI inicializado com sucesso!")
+        logger.info("🤖 Bot Inteligente inicializado sem OpenAI!")
 
     def init_database(self):
-        """Inicializa o banco de dados SQLite"""
+        """Inicializa banco de dados"""
         try:
             self.conn = sqlite3.connect('conversations.db', check_same_thread=False)
             cursor = self.conn.cursor()
@@ -115,174 +152,92 @@ class WhatsAppAI:
                 )
             ''')
             
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS client_profiles (
-                    phone TEXT PRIMARY KEY,
-                    location TEXT,
-                    interests TEXT,
-                    conversion_score REAL,
-                    last_interaction DATETIME
-                )
-            ''')
-            
             self.conn.commit()
             logger.info("📊 Banco de dados inicializado")
             
         except Exception as e:
             logger.error(f"Erro ao inicializar banco: {e}")
 
-    def get_system_prompt(self, profile: ClientProfile) -> str:
-        """Gera o prompt personalizado para cada cliente"""
-        return f"""
-Você é Ana, uma atendente virtual especializada em vendas. Seu objetivo é converter clientes de forma natural e eficiente.
-
-INFORMAÇÕES DO CLIENTE:
-- Telefone: {profile.phone}
-- Localização: {profile.location or 'Não informada'}
-- Estágio atual: {profile.conversation_stage.value}
-- Mensagens trocadas: {profile.messages_count}
-- Score de conversão: {profile.conversion_score:.2f}/1.0
-- Última interação: {profile.last_interaction or 'Primeira vez'}
-
-PRODUTOS DISPONÍVEIS:
-- Básico: €19,90 - {self.products['basic']['description']}
-- Premium: €39,90 - {self.products['premium']['description']}
-- VIP: €69,90 - {self.products['vip']['description']}
-- Exclusivo: €100,00 - {self.products['exclusive']['description']}
-
-PERSONALIDADE E ESTILO:
-- Seja sedutora, provocante e envolvente
-- Use linguagem informal portuguesa (né, kkk, amor, gatinho, etc.)
-- Seja safadinha mas elegante - crie tensão sexual
-- Faça insinuações sutis e provocações
-- Use emojis sensuais: 😏😘🔥💋
-- Seja sempre transparente sobre preços
-- Crie desejo antes de vender
-
-ESTRATÉGIA POR ESTÁGIO:
-
-🔸 INICIAL (primeiras mensagens):
-- "Oi gatinho! Tudo bem? 😏"
-- "Olá amor, como está? 😘" 
-- Pergunte de onde fala com charme
-- Seja acolhedora e sedutora
-
-🔸 QUALIFICAÇÃO (mensagens 2-6):
-- "O que mais te excita?" "Conta pra mim seus desejos..."
-- "Já teve experiências especiais assim antes?"
-- Use provocações: "Aposto que você gosta de..." 
-- Construa tensão sexual sem mencionar preços
-- "Me conta o que te deixa com tesão..."
-
-🔸 INTERESSE (mensagens 6-10):
-- "Sabia que trabalho com conteúdo bem especial para homens como você? 🔥"
-- "Tenho coisas que vão te deixar louco de tesão..."
-- "Quer conhecer meu lado mais safado?"
-- Ainda NÃO fale preços - construa mais desejo
-
-🔸 OBJEÇÕES (se aparecerem):
-- "É só assinar né gatinho, você vai virar meu cliente especial 😏"
-- "Não tem pegadinha nenhuma amor, não sou dessas"
-- "Não quero te roubar, só trabalhar... e te dar muito prazer 🔥"
-- "Se fosse golpe, pediria muito mais né amor"
-
-🔸 FECHAMENTO (score > 0.6):
-- "Então gatinho, quer ser meu cliente especial? 💋"
-- "Vou te mostrar coisas que você nunca viu..."
-- Seja direta mas sensual: "O link está aqui amor, me faz feliz? 😘"
-- Envie o link com charme
-
-REGRAS IMPORTANTES:
-- SÓ mencione preços quando o cliente demonstrar interesse real
-- SEMPRE seja transparente - "sem pegadinhas"
-- Responda objeções com naturalidade, como nos exemplos
-- Use as frases exatas que funcionam
-- Quando enviar link, diga: "O link está aí" + link
-
-SINAIS PARA AVANÇAR ESTÁGIOS:
-- Cliente pergunta sobre valores = INTERESSADO
-- Cliente menciona experiências ruins = OBJEÇÕES
-- Cliente pergunta "como funciona" = PRONTO PARA FECHAR
-- Cliente demonstra pressa = FECHAR RÁPIDO
-
-Mantenha conversas fluidas e naturais. Você é muito boa no que faz!
-"""
-
     def analyze_message_intent(self, message: str) -> Dict:
-        """Analisa a intenção e sentimento da mensagem"""
+        """Analisa intenção da mensagem usando padrões"""
         message_lower = message.lower()
         
-        # Extrai localização se mencionada
+        # Detecta localização
         location_match = re.search(r'\b(lisboa|porto|leiria|coimbra|braga|aveiro|faro)\b', message_lower)
         location = location_match.group(1) if location_match else None
         
-        intent_analysis = {
+        intent = {
             "interest_level": 0,
-            "objections": [],
-            "questions": [],
             "location": location,
-            "price_concern": bool(re.search(r'\b(preço|valor|quanto|€|euro|caro|barato|custa)\b', message_lower)),
-            "meeting_interest": bool(re.search(r'\b(encontrar|sair|marcar|hoje|amanhã|fim.de.semana|disponível)\b', message_lower)),
-            "trust_concern": bool(re.search(r'\b(roubar|golpe|taxa|segurança|confiança|já.aconteceu|cuidado)\b', message_lower)),
-            "positive_signals": bool(re.search(r'\b(interesse|quero|gostaria|adoraria|sim|claro|perfeito|top|legal)\b', message_lower)),
-            "urgency": bool(re.search(r'\b(hoje|agora|rápido|urgente)\b', message_lower))
+            "greeting": bool(re.search(r'\b(oi|olá|hey|oie|ola)\b', message_lower)),
+            "price_question": bool(re.search(r'\b(preço|valor|quanto|€|euro|custa|pagar)\b', message_lower)),
+            "meeting_interest": bool(re.search(r'\b(encontrar|sair|marcar|hoje|amanhã|sexo|transar)\b', message_lower)),
+            "trust_concern": bool(re.search(r'\b(roubar|golpe|taxa|segurança|confiança|cuidado)\b', message_lower)),
+            "positive_signals": bool(re.search(r'\b(sim|interesse|quero|gostaria|adoraria|claro|perfeito|top|legal|vamos)\b', message_lower)),
+            "age_question": bool(re.search(r'\b(idade|anos|velha|nova)\b', message_lower)),
+            "compliment": bool(re.search(r'\b(linda|gostosa|bonita|sexy|gatinha|delicia)\b', message_lower)),
+            "location_question": bool(re.search(r'\b(onde|perto|longe|cidade)\b', message_lower)),
+            "availability": bool(re.search(r'\b(livre|disponível|agenda|horário|tempo)\b', message_lower))
         }
         
         # Calcula nível de interesse
-        if intent_analysis["positive_signals"]:
-            intent_analysis["interest_level"] += 2
-        if intent_analysis["meeting_interest"]:
-            intent_analysis["interest_level"] += 3
-        if intent_analysis["price_concern"] and not intent_analysis["trust_concern"]:
-            intent_analysis["interest_level"] += 1
-            
-        return intent_analysis
+        if intent["positive_signals"]: intent["interest_level"] += 2
+        if intent["meeting_interest"]: intent["interest_level"] += 3
+        if intent["price_question"] and not intent["trust_concern"]: intent["interest_level"] += 2
+        if intent["compliment"]: intent["interest_level"] += 1
+        if intent["availability"]: intent["interest_level"] += 2
+        
+        return intent
 
-    def update_conversion_score(self, profile: ClientProfile, intent: Dict):
-        """Atualiza score baseado na análise da mensagem"""
-        score_delta = 0
+    def update_client_profile(self, phone: str, message: str, intent: Dict):
+        """Atualiza perfil do cliente baseado na conversa"""
+        if phone not in self.client_profiles:
+            self.client_profiles[phone] = ClientProfile(phone=phone)
+            
+        profile = self.client_profiles[phone]
+        profile.messages_count += 1
+        profile.last_interaction = datetime.now()
         
-        # Sinais positivos
-        if intent["interest_level"] > 0:
-            score_delta += intent["interest_level"] * 0.15
-            
-        if intent["meeting_interest"]:
-            score_delta += 0.25
-            
-        if intent["positive_signals"]:
-            score_delta += 0.2
-            
-        if intent["urgency"]:
-            score_delta += 0.15
-            
-        # Sinais negativos
-        if intent["trust_concern"]:
-            score_delta -= 0.1
-            
-        # Aplica mudança no score
-        profile.conversion_score = max(0.0, min(1.0, profile.conversion_score + score_delta))
-        
-        # Atualiza localização se detectada
+        # Atualiza localização
         if intent["location"]:
             profile.location = intent["location"].title()
+            
+        # Calcula score de conversão
+        score_delta = 0
+        if intent["interest_level"] > 0:
+            score_delta += intent["interest_level"] * 0.1
+        if intent["meeting_interest"]:
+            score_delta += 0.3
+        if intent["positive_signals"]:
+            score_delta += 0.2
+        if intent["trust_concern"]:
+            score_delta -= 0.15
+            
+        profile.conversion_score = max(0.0, min(1.0, profile.conversion_score + score_delta))
+        
+        # Atualiza estágio
+        old_stage = profile.conversation_stage
+        profile.conversation_stage = self.determine_next_stage(profile, intent)
+        
+        if old_stage != profile.conversation_stage:
+            logger.info(f"Cliente {phone}: {old_stage.value} → {profile.conversation_stage.value} (Score: {profile.conversion_score:.2f})")
 
     def determine_next_stage(self, profile: ClientProfile, intent: Dict) -> ConversationStage:
-        """Determina o próximo estágio baseado no contexto"""
+        """Determina próximo estágio da conversa"""
         current = profile.conversation_stage
         score = profile.conversion_score
         
-        # Transições de estágio
         if current == ConversationStage.INICIAL and profile.messages_count >= 2:
             return ConversationStage.QUALIFICACAO
             
         elif current == ConversationStage.QUALIFICACAO:
-            if intent["meeting_interest"] or score > 0.3:
+            if intent["meeting_interest"] or score > 0.4:
                 return ConversationStage.INTERESSE
                 
         elif current == ConversationStage.INTERESSE:
             if intent["trust_concern"]:
                 return ConversationStage.OBJECOES
-            elif score > 0.6 or intent["price_concern"]:
+            elif score > 0.6 or intent["price_question"]:
                 return ConversationStage.FECHAMENTO
                 
         elif current == ConversationStage.OBJECOES:
@@ -295,128 +250,102 @@ Mantenha conversas fluidas e naturais. Você é muito boa no que faz!
                 
         return current
 
-    def select_optimal_product(self, profile: ClientProfile, intent: Dict) -> str:
-        """Seleciona o produto ideal baseado no perfil e comportamento"""
-        score = profile.conversion_score
+    def generate_intelligent_response(self, phone: str, message: str) -> str:
+        """Gera resposta inteligente sem IA externa"""
         
-        # Lógica de seleção baseada no score e sinais
-        if score > 0.8 or intent.get("urgency", False):
-            return "vip"  # Cliente muito interessado
-        elif score > 0.6:
-            return "premium"  # Cliente interessado
-        elif score > 0.4:
-            return "basic"  # Cliente testando águas
-        else:
-            return "basic"  # Começar com o mais acessível
-
-    async def generate_intelligent_response(self, client_phone: str, message: str) -> str:
-        """Gera resposta inteligente usando GPT-4"""
-        
-        # Obtém ou cria perfil
-        if client_phone not in self.client_profiles:
-            self.client_profiles[client_phone] = ClientProfile(phone=client_phone)
-            
-        profile = self.client_profiles[client_phone]
-        profile.messages_count += 1
-        profile.last_interaction = datetime.now()
-        
-        # Analisa a mensagem
+        # Analisa mensagem
         intent = self.analyze_message_intent(message)
         
-        # Atualiza score e estágio
-        self.update_conversion_score(profile, intent)
-        old_stage = profile.conversation_stage
-        profile.conversation_stage = self.determine_next_stage(profile, intent)
+        # Atualiza perfil
+        self.update_client_profile(phone, message, intent)
         
-        # Log da progressão
-        if old_stage != profile.conversation_stage:
-            logger.info(f"Cliente {client_phone}: {old_stage.value} → {profile.conversation_stage.value} (Score: {profile.conversion_score:.2f})")
-        
-        # Prepara contexto da conversa
-        if client_phone not in self.conversation_history:
-            self.conversation_history[client_phone] = []
-            
-        conversation = self.conversation_history[client_phone][-8:]  # Últimas 8 mensagens
-        
-        # Adiciona instruções específicas do estágio
-        stage_instructions = self.get_stage_instructions(profile, intent)
-        
-        # Monta mensagens para GPT
-        messages = [
-            {"role": "system", "content": self.get_system_prompt(profile) + stage_instructions},
-            *conversation,
-            {"role": "user", "content": message}
-        ]
-        
-        try:
-            # Chama GPT-4
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4",
-                messages=messages,
-                max_tokens=120,
-                temperature=0.8,
-                frequency_penalty=0.3
-            )
-            
-            ai_response = response.choices[0].message.content.strip()
-            
-            # Pós-processamento da resposta
-            ai_response = self.post_process_response(ai_response, profile, intent)
-            
-            # Salva conversa
-            conversation.extend([
-                {"role": "user", "content": message},
-                {"role": "assistant", "content": ai_response}
-            ])
-            self.conversation_history[client_phone] = conversation
-            
-            # Salva no banco
-            self.save_to_database(client_phone, message, ai_response, profile)
-            
-            return ai_response
-            
-        except Exception as e:
-            logger.error(f"Erro GPT-4: {e}")
-            return "Oi! Houve um probleminha técnico aqui. Pode mandar de novo? 😊"
-
-    def get_stage_instructions(self, profile: ClientProfile, intent: Dict) -> str:
-        """Instruções específicas baseadas no estágio atual"""
+        profile = self.client_profiles[phone]
         stage = profile.conversation_stage
         
-        if stage == ConversationStage.INICIAL:
-            return "\n\nESTÁGIO INICIAL: Seja acolhedora, pergunte de onde fala, crie rapport inicial."
-            
-        elif stage == ConversationStage.QUALIFICACAO:
-            return "\n\nESTÁGIO QUALIFICAÇÃO: Identifique interesses, construa confiança, NÃO mencione preços ainda."
-            
-        elif stage == ConversationStage.INTERESSE:
-            return "\n\nESTÁGIO INTERESSE: Cliente demonstrou interesse. Explique que trabalha com 'conteúdo exclusivo para clientes especiais'."
-            
-        elif stage == ConversationStage.OBJECOES:
-            return f"\n\nESTÁGIO OBJEÇÕES: Use exatamente estas frases: 'É só assinar né, você vai estar virando meu cliente' e 'Não tem taxas extras como já deve ter visto por aí'."
-            
-        elif stage == ConversationStage.FECHAMENTO:
-            product = self.select_optimal_product(profile, intent)
-            product_info = self.products[product]
-            return f"\n\nESTÁGIO FECHAMENTO: Hora de fechar! Ofereça {product_info['description']} por €{product_info['price']} e envie: 'O link está aí, caso queira: {product_info['link']}'"
-            
-        return ""
+        # Histórico de mensagens
+        if phone not in self.conversation_history:
+            self.conversation_history[phone] = []
+        self.conversation_history[phone].append(message)
+        
+        # Gera resposta baseada no estágio
+        response = self.get_stage_response(profile, intent, message)
+        
+        # Salva no banco
+        self.save_conversation(phone, message, response, profile)
+        
+        return response
 
-    def post_process_response(self, response: str, profile: ClientProfile, intent: Dict) -> str:
-        """Pós-processa a resposta para garantir qualidade"""
+    def get_stage_response(self, profile: ClientProfile, intent: Dict, message: str) -> str:
+        """Gera resposta baseada no estágio atual"""
+        stage = profile.conversation_stage
+        message_lower = message.lower()
         
-        # Remove possíveis repetições
-        response = re.sub(r'(.+?)\1+', r'\1', response)
+        # ESTÁGIO INICIAL
+        if stage == ConversationStage.INICIAL:
+            if intent["greeting"]:
+                response = random.choice(self.responses["saudacoes"])
+                if not intent["location"]:
+                    response += " " + random.choice(self.responses["pergunta_origem"])
+                return response
+            elif intent["location"]:
+                return f"Ah, {profile.location}! Que legal! Como posso te ajudar hoje, gatinho? 😘"
+            else:
+                return random.choice(self.responses["saudacoes"])
         
-        # Garante que links só aparecem no fechamento
-        if profile.conversation_stage != ConversationStage.FECHAMENTO:
-            response = re.sub(r'https?://[^\s]+', '', response)
+        # ESTÁGIO QUALIFICAÇÃO  
+        elif stage == ConversationStage.QUALIFICACAO:
+            if intent["location"] and not profile.location:
+                return f"Que legal, {intent['location'].title()}! " + random.choice(self.responses["qualificacao"])
+            elif intent["compliment"]:
+                return "Obrigada gatinho! 😘 " + random.choice(self.responses["qualificacao"])
+            elif "trabalha" in message_lower or "faz" in message_lower:
+                return "Trabalho com algo bem especial... " + random.choice(self.responses["qualificacao"])
+            else:
+                return random.choice(self.responses["qualificacao"])
+        
+        # ESTÁGIO INTERESSE
+        elif stage == ConversationStage.INTERESSE:
+            if intent["positive_signals"]:
+                return random.choice(self.responses["interesse"])
+            elif intent["price_question"]:
+                return "Antes de falar de valores, me conta: você tem interesse real? " + random.choice(self.responses["interesse"])
+            else:
+                return random.choice(self.responses["interesse"])
+        
+        # ESTÁGIO OBJEÇÕES
+        elif stage == ConversationStage.OBJECOES:
+            if intent["trust_concern"] or "taxa" in message_lower or "roubar" in message_lower:
+                return random.choice(self.responses["objecoes_taxa"])
+            else:
+                return "Então gatinho, tem interesse real? " + random.choice(self.responses["interesse"])
+        
+        # ESTÁGIO FECHAMENTO
+        elif stage == ConversationStage.FECHAMENTO:
+            product = self.select_product(profile)
+            product_info = self.products[product]
             
-        # Limita tamanho da resposta
-        if len(response) > 200:
-            response = response[:200] + "..."
-            
-        return response.strip()
+            if intent["positive_signals"] or "sim" in message_lower or "quero" in message_lower:
+                return f"{random.choice(self.responses['fechamento'])}\n\nPara clientes especiais como você: €{product_info['price']}\n\nO link está aí: {product_info['link']}"
+            elif intent["price_question"]:
+                return f"Para você: €{product_info['price']} - {product_info['description']}\n\n{random.choice(self.responses['fechamento'])}\n\n{product_info['link']}"
+            else:
+                return f"Então gatinho? {random.choice(self.responses['fechamento'])}"
+        
+        # CONVERTIDO
+        elif stage == ConversationStage.CONVERTIDO:
+            return "Obrigada gatinho! Você vai adorar! 😘💋"
+        
+        # Resposta padrão
+        return "Me conta mais, amor... 😘"
+
+    def select_product(self, profile: ClientProfile) -> str:
+        """Seleciona produto baseado no perfil"""
+        if profile.conversion_score > 0.8:
+            return "vip"
+        elif profile.conversion_score > 0.6:
+            return "premium"  
+        else:
+            return "basic"
 
     async def send_whatsapp_message(self, phone: str, message: str) -> bool:
         """Envia mensagem via Maytapi"""
@@ -427,10 +356,10 @@ Mantenha conversas fluidas e naturais. Você é muito boa no que faz!
             "Content-Type": "application/json"
         }
         
-        # Limpa o número de telefone
+        # Limpa número
         clean_phone = re.sub(r'[^\d]', '', phone)
-        if not clean_phone.startswith('351'):  # Adiciona código Portugal se necessário
-            clean_phone = f"351{clean_phone}"
+        if not clean_phone.startswith('55'):
+            clean_phone = f"55{clean_phone}"
         
         payload = {
             "to_number": clean_phone,
@@ -452,143 +381,118 @@ Mantenha conversas fluidas e naturais. Você é muito boa no que faz!
                 return False
 
     async def process_incoming_message(self, phone: str, message: str):
-        """Processa mensagem recebida e responde automaticamente"""
+        """Processa mensagem recebida"""
         try:
-            logger.info(f"📥 Mensagem recebida de {phone}: {message[:50]}...")
+            logger.info(f"📥 Mensagem de {phone}: {message[:50]}...")
             
             # Gera resposta inteligente
-            ai_response = await self.generate_intelligent_response(phone, message)
+            response = self.generate_intelligent_response(phone, message)
             
-            logger.info(f"🤖 Resposta gerada: {ai_response[:50]}...")
+            logger.info(f"🤖 Resposta: {response[:50]}...")
             
             # Envia resposta
-            success = await self.send_whatsapp_message(phone, ai_response)
+            success = await self.send_whatsapp_message(phone, response)
             
             if success:
-                # Verifica potencial conversão
                 profile = self.client_profiles.get(phone)
                 if profile and profile.conversion_score > 0.7:
                     logger.info(f"🎯 ALTA CHANCE DE CONVERSÃO: {phone} (Score: {profile.conversion_score:.2f})")
                     
-                if "stripe.com" in ai_response or "buy." in ai_response:
+                if "stripe.com" in response or "buy." in response:
                     logger.info(f"💰 LINK DE PAGAMENTO ENVIADO para {phone}")
                     self.register_conversion_attempt(phone)
                     
         except Exception as e:
-            logger.error(f"❌ Erro ao processar mensagem de {phone}: {e}")
+            logger.error(f"❌ Erro ao processar mensagem: {e}")
 
     def register_conversion_attempt(self, phone: str):
         """Registra tentativa de conversão"""
-        profile = self.client_profiles.get(phone)
-        if profile:
+        try:
             cursor = self.conn.cursor()
             cursor.execute('''
                 INSERT INTO conversions (phone, product, value, timestamp)
                 VALUES (?, ?, ?, ?)
             ''', (phone, "tentativa", 0, datetime.now()))
             self.conn.commit()
+        except Exception as e:
+            logger.error(f"Erro ao registrar conversão: {e}")
 
-    def save_to_database(self, phone: str, message: str, response: str, profile: ClientProfile):
-        """Salva conversa no banco de dados"""
+    def save_conversation(self, phone: str, message: str, response: str, profile: ClientProfile):
+        """Salva conversa no banco"""
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
                 INSERT INTO conversations (phone, message, response, stage, conversion_score)
                 VALUES (?, ?, ?, ?, ?)
             ''', (phone, message, response, profile.conversation_stage.value, profile.conversion_score))
-            
-            # Atualiza perfil do cliente
-            cursor.execute('''
-                INSERT OR REPLACE INTO client_profiles (phone, location, conversion_score, last_interaction)
-                VALUES (?, ?, ?, ?)
-            ''', (phone, profile.location, profile.conversion_score, datetime.now()))
-            
             self.conn.commit()
         except Exception as e:
-            logger.error(f"Erro ao salvar no banco: {e}")
+            logger.error(f"Erro ao salvar conversa: {e}")
 
-    def get_analytics_summary(self) -> Dict:
-        """Retorna resumo analítico das conversas"""
-        cursor = self.conn.cursor()
-        
+    def get_analytics(self) -> Dict:
+        """Retorna analytics"""
         try:
-            # Estatísticas básicas
+            cursor = self.conn.cursor()
+            
             cursor.execute("SELECT COUNT(DISTINCT phone) FROM conversations WHERE date(timestamp) = date('now')")
             clients_today = cursor.fetchone()[0]
             
-            cursor.execute("SELECT COUNT(DISTINCT phone) FROM conversations")
+            cursor.execute("SELECT COUNT(DISTINCT phone) FROM conversations")  
             total_clients = cursor.fetchone()[0]
             
             cursor.execute("SELECT COUNT(*) FROM conversions WHERE product != 'tentativa'")
-            real_conversions = cursor.fetchone()[0]
+            conversions = cursor.fetchone()[0]
             
             cursor.execute("SELECT COUNT(*) FROM conversions WHERE product = 'tentativa'")
-            conversion_attempts = cursor.fetchone()[0]
+            attempts = cursor.fetchone()[0]
             
-            # Taxa de conversão
-            conversion_rate = (real_conversions / total_clients * 100) if total_clients > 0 else 0
-            
-            # Clientes por estágio
-            cursor.execute("SELECT stage, COUNT(*) FROM conversations WHERE date(timestamp) = date('now') GROUP BY stage")
-            today_stages = dict(cursor.fetchall())
+            conversion_rate = (conversions / total_clients * 100) if total_clients > 0 else 0
             
             return {
                 "clients_today": clients_today,
                 "total_clients": total_clients,
-                "real_conversions": real_conversions,
-                "conversion_attempts": conversion_attempts,
+                "conversions": conversions,
+                "attempts": attempts,
                 "conversion_rate": f"{conversion_rate:.1f}%",
-                "today_stages": today_stages,
-                "status": "🟢 Sistema funcionando"
+                "status": "🟢 Sistema funcionando SEM OpenAI"
             }
             
         except Exception as e:
-            logger.error(f"Erro analytics: {e}")
             return {"error": str(e), "status": "🔴 Erro no sistema"}
 
-# FastAPI Application
-app = FastAPI(title="🤖 Atendente Virtual WhatsApp", version="1.0")
+# FastAPI App
+app = FastAPI(title="🤖 Atendente Virtual WhatsApp - SEM OpenAI", version="2.0")
 
-# Inicialização global
-ai_assistant = WhatsAppAI()
+# Inicializar sistema
+bot = WhatsAppBotIntelligent()
 
 class MaytapiWebhook(BaseModel):
-    """Modelo para webhook do Maytapi"""
     type: str
     data: Dict
 
 @app.post("/webhook")
-async def receive_whatsapp_message(webhook: MaytapiWebhook):
-    """Recebe mensagens do Maytapi webhook"""
+async def receive_message(webhook: MaytapiWebhook):
+    """Recebe mensagens do Maytapi"""
     try:
         if webhook.type == "message":
             data = webhook.data
-            
-            # Extrai informações da mensagem
             phone = data.get("fromNumber", "")
-            message_text = data.get("message", "")
+            message = data.get("message", "")
             message_type = data.get("type", "")
             
-            # Só processa mensagens de texto
-            if message_type == "text" and message_text and phone:
-                logger.info(f"📨 Nova mensagem de {phone}")
-                await ai_assistant.process_incoming_message(phone, message_text)
+            if message_type == "text" and message and phone:
+                await bot.process_incoming_message(phone, message)
                 
-        return {"status": "success", "message": "Processado com sucesso"}
+        return {"status": "success"}
         
     except Exception as e:
-        logger.error(f"❌ Erro no webhook: {e}")
+        logger.error(f"❌ Erro webhook: {e}")
         return {"status": "error", "message": str(e)}
-
-@app.get("/webhook")
-async def verify_webhook(request: Request):
-    """Verificação do webhook (se necessário)"""
-    return {"status": "Webhook ativo", "timestamp": datetime.now()}
 
 @app.get("/")
 async def dashboard():
     """Dashboard principal"""
-    analytics = ai_assistant.get_analytics_summary()
+    analytics = bot.get_analytics()
     
     html = f"""
     <!DOCTYPE html>
@@ -601,35 +505,31 @@ async def dashboard():
             .card {{ background: white; padding: 20px; margin: 10px 0; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }}
             .metric {{ font-size: 24px; font-weight: bold; color: #2196F3; }}
             .status {{ font-size: 18px; margin: 10px 0; }}
+            .success {{ color: #4CAF50; font-weight: bold; }}
         </style>
     </head>
     <body>
-        <h1>🤖 Atendente Virtual - Dashboard</h1>
+        <h1>🤖 Atendente Virtual - Dashboard SEM OpenAI</h1>
         
         <div class="card">
-            <h2>📊 Estatísticas de Hoje</h2>
-            <div class="status">{analytics.get('status', 'Carregando...')}</div>
+            <div class="status success">✅ FUNCIONANDO 100% GRÁTIS - SEM OPENAI!</div>
+            <h2>📊 Estatísticas</h2>
             <p>Clientes hoje: <span class="metric">{analytics.get('clients_today', 0)}</span></p>
-            <p>Total de clientes: <span class="metric">{analytics.get('total_clients', 0)}</span></p>
-            <p>Taxa de conversão: <span class="metric">{analytics.get('conversion_rate', '0%')}</span></p>
+            <p>Total clientes: <span class="metric">{analytics.get('total_clients', 0)}</span></p>
+            <p>Taxa conversão: <span class="metric">{analytics.get('conversion_rate', '0%')}</span></p>
         </div>
         
         <div class="card">
             <h2>🎯 Performance</h2>
-            <p>Conversões realizadas: <span class="metric">{analytics.get('real_conversions', 0)}</span></p>
-            <p>Links enviados: <span class="metric">{analytics.get('conversion_attempts', 0)}</span></p>
+            <p>Links enviados: <span class="metric">{analytics.get('attempts', 0)}</span></p>
+            <p>Conversões: <span class="metric">{analytics.get('conversions', 0)}</span></p>
         </div>
         
         <div class="card">
-            <h2>⚙️ Sistema</h2>
-            <p>Status: <span class="metric">🟢 Online</span></p>
-            <p>Última atualização: <span class="metric">{datetime.now().strftime('%H:%M:%S')}</span></p>
-        </div>
-        
-        <div class="card">
-            <h2>🔗 Endpoints Úteis</h2>
+            <h2>🔗 Testes</h2>
+            <p><a href="/test-message?phone=554288388120&message=oi">🧪 Testar: "oi"</a></p>
+            <p><a href="/test-message?phone=554288388120&message=tenho interesse">🧪 Testar: "tenho interesse"</a></p>
             <p><a href="/analytics">📊 Analytics JSON</a></p>
-            <p><a href="/test-message?phone=351912345678&message=Oi">🧪 Testar Mensagem</a></p>
         </div>
     </body>
     </html>
@@ -637,50 +537,44 @@ async def dashboard():
     
     return HTMLResponse(html)
 
-@app.get("/analytics")
+@app.get("/analytics")  
 async def get_analytics():
-    """Endpoint JSON com analytics"""
-    return ai_assistant.get_analytics_summary()
+    """Analytics JSON"""
+    return bot.get_analytics()
 
 @app.get("/test-message")
-async def test_ai_response(phone: str = "351912345678", message: str = "Oi tudo bem"):
-    """Endpoint para testar a IA sem WhatsApp"""
+async def test_response(phone: str = "554288388120", message: str = "oi"):
+    """Testar resposta da IA"""
     try:
-        response = await ai_assistant.generate_intelligent_response(phone, message)
-        profile = ai_assistant.client_profiles.get(phone)
+        response = bot.generate_intelligent_response(phone, message)
+        profile = bot.client_profiles.get(phone)
         
         return {
             "success": True,
-            "user_message": message,
-            "ai_response": response,
-            "client_profile": {
+            "message": message,
+            "response": response,
+            "profile": {
                 "stage": profile.conversation_stage.value if profile else "inicial",
                 "score": profile.conversion_score if profile else 0.0,
-                "messages_count": profile.messages_count if profile else 0,
-                "location": profile.location if profile else None
+                "messages": profile.messages_count if profile else 0
             }
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# Importação adicional para HTML response
-from fastapi.responses import HTMLResponse
-
 if __name__ == "__main__":
     import uvicorn
     
     print("=" * 60)
-    print("🤖 ATENDENTE VIRTUAL INTELIGENTE")
+    print("🤖 ATENDENTE VIRTUAL - VERSÃO GRATUITA")
     print("=" * 60)
-    print("📱 WhatsApp: Integrado via Maytapi")
-    print("🧠 IA: GPT-4 Configurado") 
-    print("📊 Analytics: Ativo")
-    print("🎯 Taxa de Conversão Esperada: ~66%")
+    print("✅ SEM OpenAI - 100% GRÁTIS")
+    print("🧠 Lógica Inteligente Baseada nas Suas Técnicas")
+    print("📱 WhatsApp: Integrado via Maytapi")  
+    print("🎯 Taxa de Conversão Esperada: ~60%")
     print("=" * 60)
     print("🌐 Dashboard: http://localhost:8000")
     print("🧪 Teste: http://localhost:8000/test-message")
-    print("📊 Analytics: http://localhost:8000/analytics")
     print("=" * 60)
     
-    # Executa o servidor
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
