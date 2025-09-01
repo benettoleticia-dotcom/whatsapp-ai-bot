@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -467,27 +468,72 @@ app = FastAPI(title="🤖 Atendente Virtual WhatsApp - SEM OpenAI", version="2.0
 bot = WhatsAppBotIntelligent()
 
 class MaytapiWebhook(BaseModel):
-    type: str
-    data: Dict
+    type: Optional[str] = None
+    data: Optional[Dict] = None
+    # Campos alternativos que o Maytapi pode enviar
+    message: Optional[str] = None
+    fromNumber: Optional[str] = None
+    timestamp: Optional[str] = None
+    messageType: Optional[str] = None
 
 @app.post("/webhook")
-async def receive_message(webhook: MaytapiWebhook):
-    """Recebe mensagens do Maytapi"""
+async def receive_message(request: Request):
+    """Recebe mensagens do Maytapi - aceita qualquer formato"""
     try:
-        if webhook.type == "message":
-            data = webhook.data
-            phone = data.get("fromNumber", "")
-            message = data.get("message", "")
-            message_type = data.get("type", "")
+        # Pega dados brutos da requisição
+        raw_data = await request.json()
+        logger.info(f"📨 Dados recebidos do webhook: {raw_data}")
+        
+        # Tenta extrair informações de diferentes formatos possíveis
+        phone = None
+        message = None
+        message_type = None
+        
+        # Formato 1: {type: "message", data: {...}}
+        if "type" in raw_data and raw_data["type"] == "message" and "data" in raw_data:
+            data = raw_data["data"]
+            phone = data.get("fromNumber") or data.get("from") or data.get("phone")
+            message = data.get("message") or data.get("text") or data.get("body")
+            message_type = data.get("type") or data.get("messageType")
             
-            if message_type == "text" and message and phone:
-                await bot.process_incoming_message(phone, message)
+        # Formato 2: dados diretos na raiz
+        elif "fromNumber" in raw_data or "from" in raw_data:
+            phone = raw_data.get("fromNumber") or raw_data.get("from") or raw_data.get("phone")
+            message = raw_data.get("message") or raw_data.get("text") or raw_data.get("body")
+            message_type = raw_data.get("type") or raw_data.get("messageType") or "text"
+            
+        # Formato 3: estrutura aninhada diferente
+        elif "messages" in raw_data:
+            for msg in raw_data["messages"]:
+                phone = msg.get("fromNumber") or msg.get("from") or msg.get("phone")
+                message = msg.get("message") or msg.get("text") or msg.get("body")
+                message_type = msg.get("type") or msg.get("messageType") or "text"
+                break
                 
-        return {"status": "success"}
+        # Log para debug
+        logger.info(f"📱 Extraído: phone={phone}, message={message}, type={message_type}")
+        
+        # Processa se temos dados válidos
+        if phone and message and (message_type == "text" or not message_type):
+            # Remove caracteres especiais do telefone
+            clean_phone = phone.replace("+", "").replace("-", "").replace(" ", "")
+            await bot.process_incoming_message(clean_phone, message)
+            logger.info(f"✅ Mensagem processada com sucesso: {clean_phone}")
+        else:
+            logger.warning(f"⚠️ Dados insuficientes para processar: phone={phone}, message={message}")
+            
+        return {"status": "success", "received": True}
         
     except Exception as e:
-        logger.error(f"❌ Erro webhook: {e}")
-        return {"status": "error", "message": str(e)}
+        logger.error(f"❌ Erro no webhook: {e}")
+        # Retorna sucesso mesmo com erro para evitar reenvios do Maytapi
+        return {"status": "error", "message": str(e), "received": True}
+
+@app.get("/webhook")
+async def verify_webhook(request: Request):
+    """Verificação do webhook (GET)"""
+    logger.info(f"📋 Verificação webhook GET: {request.query_params}")
+    return {"status": "Webhook ativo", "timestamp": datetime.now(), "method": "GET"}
 
 @app.get("/")
 async def dashboard():
@@ -500,23 +546,26 @@ async def dashboard():
     <head>
         <title>🤖 Atendente Virtual - Dashboard</title>
         <meta charset="utf-8">
+        <meta http-equiv="refresh" content="30">
         <style>
             body {{ font-family: Arial; margin: 40px; background: #f5f5f5; }}
             .card {{ background: white; padding: 20px; margin: 10px 0; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }}
             .metric {{ font-size: 24px; font-weight: bold; color: #2196F3; }}
             .status {{ font-size: 18px; margin: 10px 0; }}
             .success {{ color: #4CAF50; font-weight: bold; }}
+            .debug {{ background: #f8f9fa; padding: 10px; border-left: 4px solid #007bff; margin: 10px 0; font-family: monospace; }}
         </style>
     </head>
     <body>
-        <h1>🤖 Atendente Virtual - Dashboard SEM OpenAI</h1>
+        <h1>🤖 Atendente Virtual - Dashboard</h1>
         
         <div class="card">
-            <div class="status success">✅ FUNCIONANDO 100% GRÁTIS - SEM OPENAI!</div>
-            <h2>📊 Estatísticas</h2>
+            <div class="status success">✅ SISTEMA FUNCIONANDO - SEM OPENAI!</div>
+            <h2>📊 Estatísticas Tempo Real</h2>
             <p>Clientes hoje: <span class="metric">{analytics.get('clients_today', 0)}</span></p>
             <p>Total clientes: <span class="metric">{analytics.get('total_clients', 0)}</span></p>
             <p>Taxa conversão: <span class="metric">{analytics.get('conversion_rate', '0%')}</span></p>
+            <p>Status: <span class="success">{analytics.get('status', 'Loading...')}</span></p>
         </div>
         
         <div class="card">
@@ -526,10 +575,25 @@ async def dashboard():
         </div>
         
         <div class="card">
-            <h2>🔗 Testes</h2>
-            <p><a href="/test-message?phone=554288388120&message=oi">🧪 Testar: "oi"</a></p>
-            <p><a href="/test-message?phone=554288388120&message=tenho interesse">🧪 Testar: "tenho interesse"</a></p>
-            <p><a href="/analytics">📊 Analytics JSON</a></p>
+            <h2>🔧 Debug & Testes</h2>
+            <div class="debug">
+                <strong>Webhook URL:</strong> /webhook<br>
+                <strong>WhatsApp Number:</strong> 554288388120<br>
+                <strong>Maytapi Product ID:</strong> {WHATSAPP_PRODUCT_ID}<br>
+                <strong>Phone ID:</strong> {WHATSAPP_PHONE_ID}
+            </div>
+            <p><a href="/test-message?phone=554288388120&message=oi" target="_blank">🧪 Testar: "oi"</a></p>
+            <p><a href="/test-message?phone=554288388120&message=tenho interesse" target="_blank">🧪 Testar: "tenho interesse"</a></p>
+            <p><a href="/test-message?phone=554288388120&message=quanto custa" target="_blank">🧪 Testar: "quanto custa"</a></p>
+            <p><a href="/analytics" target="_blank">📊 Analytics JSON</a></p>
+        </div>
+        
+        <div class="card">
+            <h2>📱 Como Testar no WhatsApp</h2>
+            <p>1. Mande mensagem para: <strong>+55 42 8838-8120</strong></p>
+            <p>2. Exemplo: "Oi tudo bem"</p>
+            <p>3. A IA deve responder automaticamente</p>
+            <p>4. Continue a conversa para testar o funil de vendas</p>
         </div>
     </body>
     </html>
@@ -578,3 +642,4 @@ if __name__ == "__main__":
     print("=" * 60)
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
