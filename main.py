@@ -11,14 +11,14 @@ import logging
 import openai
 import os
 
-# Configuração de logging
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Inicializa app FastAPI
+# FastAPI
 app = FastAPI()
 
-# Variáveis de ambiente (configurar no Render)
+# Variáveis de ambiente
 WHATSAPP_PRODUCT_ID = os.getenv("WHATSAPP_PRODUCT_ID", "ID_PRODUTO_DEFAULT")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "ID_TELEFONE_DEFAULT")
 MAYTAPI_TOKEN = os.getenv("MAYTAPI_TOKEN", "TOKEN_DEFAULT")
@@ -28,40 +28,94 @@ if OPENAI_API_KEY:
 else:
     logger.warning("⚠️ OPENAI_API_KEY não definida, respostas GPT não funcionarão!")
 
-# Inicializa sistema do bot
-try:
-    bot = WhatsAppBotIntelligent()
-except Exception as e:
-    logger.error(f"❌ Classe WhatsAppBotIntelligent não encontrada: {e}")
-    bot = None
+# ------------------------------
+# Classe WhatsAppBotIntelligent
+# ------------------------------
+class ConversationStage:
+    INICIAL = "inicial"
+    INTERESSE = "interesse"
+    FECHAMENTO = "fechamento"
 
-# Banco de respostas pré-definidas
+class ClientProfile:
+    def __init__(self):
+        self.conversation_stage = ConversationStage.INICIAL
+        self.conversion_score = 0.0
+        self.messages_count = 0
+
+class WhatsAppBotIntelligent:
+    def __init__(self):
+        self.client_profiles = {}         # {phone: ClientProfile}
+        self.conversation_history = {}    # {phone: [{"role": "user"/"bot", "content": "mensagem"}]}
+        self.analytics_data = {
+            "clients_today": 0,
+            "total_clients": 0,
+            "conversion_rate": "0%",
+            "status": "online",
+            "attempts": 0,
+            "conversions": 0
+        }
+
+    async def send_message(self, phone: str, message: str):
+        """Envia mensagem com delay humanizado e atualiza histórico"""
+        if phone not in self.conversation_history:
+            self.conversation_history[phone] = []
+        self.conversation_history[phone].append({"role": "bot", "content": message})
+
+        if phone not in self.client_profiles:
+            self.client_profiles[phone] = ClientProfile()
+        profile = self.client_profiles[phone]
+        profile.messages_count += 1
+
+        # Analytics
+        self.analytics_data["attempts"] += 1
+
+        # Delay humanizado 5-10s
+        delay_seconds = random.randint(5, 10)
+        await asyncio.sleep(delay_seconds)
+
+        # Log da mensagem
+        logger.info(f"💬 [BOT -> {phone}]: {message}")
+
+    def get_analytics(self):
+        total_clients = len(self.client_profiles)
+        self.analytics_data["total_clients"] = total_clients
+        clients_today = sum(1 for profile in self.client_profiles.values() if profile.messages_count > 0)
+        self.analytics_data["clients_today"] = clients_today
+        if total_clients > 0:
+            self.analytics_data["conversion_rate"] = f"{int((self.analytics_data['conversions']/total_clients)*100)}%"
+        return self.analytics_data
+
+# Inicializa bot
+bot = WhatsAppBotIntelligent()
+
+# ------------------------------
+# Configurações de personalidade
+# ------------------------------
+BOT_PERSONALITY = {
+    "name": "VitorBot",
+    "age": 25,
+    "style": "informal e amigável",
+    "interests": ["tecnologia", "música", "cinema"],
+    "greetings": ["Oi! 😃", "Olá! Como vai?", "E aí, tudo bem?"],
+}
+
+# Respostas pré-definidas
 PREDEFINED_RESPONSES = [
     {"trigger": "oi", "responses": ["Oi! Tudo bem?", "Olá! Como vai você?"]},
     {"trigger": "quanto custa", "responses": ["O produto custa R$ 100.", "O valor é R$ 100, posso te passar o link."]},
     {"trigger": "tenho interesse", "responses": ["Que ótimo! Posso te enviar mais detalhes?", "Perfeito! Vou te passar as informações agora."]}
 ]
 
-# Classe webhook (padrão Maytapi)
-class MaytapiWebhook(BaseModel):
-    type: Optional[str] = None
-    data: Optional[Dict] = None
-    message: Optional[str] = None
-    fromNumber: Optional[str] = None
-    timestamp: Optional[str] = None
-    messageType: Optional[str] = None
-
-# Função humanizada
+# ------------------------------
+# Função principal de resposta
+# ------------------------------
 async def process_incoming_message_humanized(phone, message):
-    """
-    Processa a mensagem simulando comportamento humano:
-    - Delay aleatório 5-10s
-    - Resposta pré-definida ou GPT se não achar trigger
-    """
     if not bot:
         logger.warning("Bot não inicializado. Ignorando mensagem.")
         return
-    delay_seconds = random.randint(5, 10)
+
+    # Delay proporcional ao tamanho da mensagem (simula digitando)
+    delay_seconds = random.randint(3, 5) + len(message)/20
     await asyncio.sleep(delay_seconds)
 
     message_lower = message.lower()
@@ -72,15 +126,32 @@ async def process_incoming_message_humanized(phone, message):
             await bot.send_message(phone, response)
             return
 
-    # Se não encontrou, gera resposta via GPT
+    # Se não encontrou, usa GPT
     if OPENAI_API_KEY:
         try:
-            prompt = f"Responda a mensagem de forma natural e humana, como se fosse uma pessoa:\nMensagem: {message}\nResposta:"
+            # Histórico últimas 5 mensagens
+            if phone not in bot.conversation_history:
+                bot.conversation_history[phone] = []
+            bot.conversation_history[phone].append({"role": "user", "content": message})
+            history_messages = bot.conversation_history[phone][-5:]
+            prompt_history = "\n".join([f"{m['role']}: {m['content']}" for m in history_messages])
+            
+            prompt = f"""
+Você é {BOT_PERSONALITY['name']}, {BOT_PERSONALITY['age']} anos.
+Estilo: {BOT_PERSONALITY['style']}.
+Interesses: {', '.join(BOT_PERSONALITY['interests'])}.
+Responda de forma natural e humana a mensagem abaixo, mantendo personalidade consistente:
+
+{prompt_history}
+Bot:
+"""
             response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=150,
-                temperature=0.8
+                max_tokens=200,
+                temperature=0.9,
+                presence_penalty=0.6,
+                frequency_penalty=0.5
             )
             human_response = response.choices[0].message.content.strip()
             await bot.send_message(phone, human_response)
@@ -90,25 +161,23 @@ async def process_incoming_message_humanized(phone, message):
     else:
         await bot.send_message(phone, "💡 Sem chave GPT. Apenas respostas pré-definidas disponíveis.")
 
+# ------------------------------
 # Webhook POST
+# ------------------------------
 @app.post("/webhook")
 async def receive_message(request: Request):
     try:
         raw_data = await request.json()
         logger.info(f"📨 Dados recebidos do webhook: {json.dumps(raw_data, indent=2)}")
 
-        # Ignora mensagens enviadas pelo próprio bot
-        from_me = False
-        if "message" in raw_data and isinstance(raw_data["message"], dict):
-            from_me = raw_data["message"].get("fromMe", False)
+        # Ignora mensagens enviadas pelo bot
+        from_me = raw_data.get("message", {}).get("fromMe", False)
         if from_me:
-            logger.info("ℹ️ Mensagem enviada pelo bot, ignorando para evitar loop")
             return {"status": "ignored", "reason": "fromMe"}
 
         # Ignora mensagens de status
         msg_type = raw_data.get("type") or raw_data.get("messageType") or "text"
         if msg_type in ["ack", "delivery", "read"]:
-            logger.info(f"ℹ️ Mensagem ignorada do tipo {msg_type}")
             return {"status": "ignored", "type": msg_type}
 
         # Extrai sender
@@ -126,45 +195,12 @@ async def receive_message(request: Request):
                 elif isinstance(raw_data[field], dict) and "text" in raw_data[field]:
                     message = raw_data[field]["text"]
                     break
-        if not message:
-            for key, value in raw_data.items():
-                if isinstance(value, dict):
-                    for msg_field in message_fields:
-                        if msg_field in value and value[msg_field]:
-                            message = value[msg_field] if isinstance(value[msg_field], str) else value[msg_field].get("text")
-                            if message:
-                                break
-                if message:
-                    break
-        if not message:
-            arrays_to_check = ["messages", "data", "items"]
-            for array_name in arrays_to_check:
-                if array_name in raw_data and isinstance(raw_data[array_name], list):
-                    for item in raw_data[array_name]:
-                        if isinstance(item, dict):
-                            for msg_field in message_fields:
-                                if msg_field in item and item[msg_field]:
-                                    message = str(item[msg_field])
-                                    break
-                            if message:
-                                break
-                if message:
-                    break
-
-        logger.info(f"📱 Análise completa:")
-        logger.info(f"   - Sender: {sender}")
-        logger.info(f"   - Message: {message}")
-        logger.info(f"   - Type: {msg_type}")
 
         if phone and message:
             clean_phone = re.sub(r"[^\d]", "", str(phone))
             if not clean_phone.startswith("55"):
                 clean_phone = f"55{clean_phone}"
-            logger.info(f"📞 Telefone limpo: {clean_phone}")
             await process_incoming_message_humanized(clean_phone, str(message))
-            logger.info(f"✅ Mensagem processada com sucesso para {clean_phone}")
-        else:
-            logger.warning("⚠️ Dados insuficientes para processar mensagem")
 
         return {"status": "success", "received": True, "processed": bool(phone and message)}
 
@@ -172,77 +208,58 @@ async def receive_message(request: Request):
         logger.error(f"❌ Erro no webhook: {e}")
         return {"status": "error", "message": str(e), "received": True}
 
+# ------------------------------
 # Webhook GET
+# ------------------------------
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     return {"status": "Webhook ativo", "timestamp": datetime.now(), "method": "GET"}
 
-# Dashboard completo
+# ------------------------------
+# Dashboard
+# ------------------------------
 @app.get("/")
 async def dashboard():
     analytics = bot.get_analytics() if bot else {}
     html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>🤖 Atendente Virtual - Dashboard</title>
-        <meta charset="utf-8">
-        <meta http-equiv="refresh" content="30">
-        <style>
-            body {{ font-family: Arial; margin: 40px; background: #f5f5f5; }}
-            .card {{ background: white; padding: 20px; margin: 10px 0; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }}
-            .metric {{ font-size: 24px; font-weight: bold; color: #2196F3; }}
-            .status {{ font-size: 18px; margin: 10px 0; }}
-            .success {{ color: #4CAF50; font-weight: bold; }}
-            .debug {{ background: #f8f9fa; padding: 10px; border-left: 4px solid #007bff; margin: 10px 0; font-family: monospace; }}
-        </style>
-    </head>
-    <body>
-        <h1>🤖 Atendente Virtual - Dashboard</h1>
-        <div class="card">
-            <div class="status success">✅ SISTEMA FUNCIONANDO</div>
-            <h2>📊 Estatísticas Tempo Real</h2>
-            <p>Clientes hoje: <span class="metric">{analytics.get('clients_today', 0)}</span></p>
-            <p>Total clientes: <span class="metric">{analytics.get('total_clients', 0)}</span></p>
-            <p>Taxa conversão: <span class="metric">{analytics.get('conversion_rate', '0%')}</span></p>
-            <p>Status: <span class="success">{analytics.get('status', 'Loading...')}</span></p>
-        </div>
-        <div class="card">
-            <h2>🎯 Performance</h2>
-            <p>Links enviados: <span class="metric">{analytics.get('attempts', 0)}</span></p>
-            <p>Conversões: <span class="metric">{analytics.get('conversions', 0)}</span></p>
-        </div>
-        <div class="card">
-            <h2>🔧 Debug & Testes</h2>
-            <div class="debug">
-                <strong>Webhook URL:</strong> /webhook<br>
-                <strong>WhatsApp Number:</strong> +55 42 98838-8120<br>
-                <strong>Maytapi Product ID:</strong> {WHATSAPP_PRODUCT_ID}<br>
-                <strong>Phone ID:</strong> {WHATSAPP_PHONE_ID}
-            </div>
-            <p><a href="/test-message?phone=5542988388120&message=oi" target="_blank">🧪 Testar: "oi"</a></p>
-            <p><a href="/test-message?phone=5542988388120&message=tenho interesse" target="_blank">🧪 Testar: "tenho interesse"</a></p>
-            <p><a href="/test-message?phone=5542988388120&message=quanto custa" target="_blank">🧪 Testar: "quanto custa"</a></p>
-            <p><a href="/analytics" target="_blank">📊 Analytics JSON</a></p>
-        </div>
-        <div class="card">
-            <h2>📱 Como Testar no WhatsApp</h2>
-            <p>1. Mande mensagem para: <strong>+55 42 98838-8120</strong></p>
-            <p>2. Exemplo: "Oi tudo bem"</p>
-            <p>3. A IA deve responder automaticamente</p>
-            <p>4. Continue a conversa para testar o funil de vendas</p>
-        </div>
-    </body>
-    </html>
-    """
+<!DOCTYPE html>
+<html>
+<head>
+<title>🤖 Atendente Virtual - Dashboard</title>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="30">
+<style>
+body {{ font-family: Arial; margin: 40px; background: #f5f5f5; }}
+.card {{ background: white; padding: 20px; margin: 10px 0; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }}
+.metric {{ font-size: 24px; font-weight: bold; color: #2196F3; }}
+.status {{ font-size: 18px; margin: 10px 0; }}
+.success {{ color: #4CAF50; font-weight: bold; }}
+.debug {{ background: #f8f9fa; padding: 10px; border-left: 4px solid #007bff; margin: 10px 0; font-family: monospace; }}
+</style>
+</head>
+<body>
+<h1>🤖 Atendente Virtual - Dashboard</h1>
+<div class="card">
+<div class="status success">✅ SISTEMA FUNCIONANDO</div>
+<p>Clientes hoje: <span class="metric">{analytics.get('clients_today', 0)}</span></p>
+<p>Total clientes: <span class="metric">{analytics.get('total_clients', 0)}</span></p>
+<p>Taxa conversão: <span class="metric">{analytics.get('conversion_rate', '0%')}</span></p>
+</div>
+</body>
+</html>
+"""
     return HTMLResponse(html)
 
+# ------------------------------
 # Analytics JSON
+# ------------------------------
 @app.get("/analytics")  
 async def get_analytics():
     return bot.get_analytics() if bot else {}
 
-# Teste de mensagens com delay humanizado
+# ------------------------------
+# Teste de mensagens
+# ------------------------------
 @app.get("/test-message")
 async def test_response(phone: str = "5542988388120", message: str = "oi"):
     try:
@@ -255,7 +272,7 @@ async def test_response(phone: str = "5542988388120", message: str = "oi"):
             "success": True,
             "message": message,
             "profile": {
-                "stage": profile.conversation_stage.value if profile else "inicial",
+                "stage": profile.conversation_stage if profile else "inicial",
                 "score": profile.conversion_score if profile else 0.0,
                 "messages": profile.messages_count if profile else 0
             }
@@ -263,10 +280,9 @@ async def test_response(phone: str = "5542988388120", message: str = "oi"):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# Inicia servidor
+# ------------------------------
+# Rodar servidor
+# ------------------------------
 if __name__ == "__main__":
     import uvicorn
-    print("="*60)
-    print("🤖 ATENDENTE VIRTUAL - VERSÃO COMPLETA HUMANIZADA")
-    print("="*60)
     uvicorn.run(app, host="0.0.0.0", port=8000)
