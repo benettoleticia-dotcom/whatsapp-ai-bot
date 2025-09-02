@@ -1,4 +1,6 @@
-fastapi==0.116.1
-uvicorn==0.35.0
-openai==1.102.0
-httpx==0.28.1
+fastapi==0.116.1       # Framework da API
+uvicorn==0.35.0        # Servidor ASGI
+openai==1.102.0        # Caso você use funções da OpenAI no bot
+httpx==0.28.1          # Chamadas HTTP à API do Maytapi
+pydantic==2.8.2        # Para os modelos BaseModel do FastAPI
+python-dotenv==1.0.1   # Caso queira usar .env para variáveis de ambiente
