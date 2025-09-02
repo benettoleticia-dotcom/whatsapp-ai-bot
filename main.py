@@ -488,9 +488,6 @@ async def receive_message(request: Request):
         message = None
         message_type = None
         
-        # Formato específico do Maytapi baseado nos logs
-        # Procura por diferentes campos possíveis que aparecem nos logs
-        
         # 1. Tenta extrair telefone de vários campos possíveis
         phone_fields = ["phone", "fromNumber", "from", "receiver", "user"]
         for field in phone_fields:
@@ -518,19 +515,29 @@ async def receive_message(request: Request):
                     break
                 elif isinstance(raw_data[field], dict) and "text" in raw_data[field]:
                     message = raw_data[field]["text"]
+                    message_type = raw_data[field].get("type", "text")
                     break
         
-        # 4. Se não encontrou na raiz, procura em objetos aninhados
+        # 4. Se não encontrou na raiz, procura em objetos aninhados (caso Maytapi)
         if not message:
             for key, value in raw_data.items():
                 if isinstance(value, dict):
+                    # Caso especial: estrutura do Maytapi
+                    if key == "message":
+                        if "text" in value:
+                            message = value["text"]
+                        if "type" in value:
+                            message_type = value["type"]
+                        break
+                    
+                    # Outras estruturas possíveis
                     for msg_field in message_fields:
                         if msg_field in value and value[msg_field]:
                             if isinstance(value[msg_field], str):
                                 message = value[msg_field]
                                 break
-                    if message:
-                        break
+                if message:
+                    break
         
         # 5. Procura por arrays de mensagens
         if not message:
@@ -548,16 +555,15 @@ async def receive_message(request: Request):
                 if message:
                     break
         
-        # 6. Determina tipo da mensagem
-        type_fields = ["type", "messageType", "msgType"]
-        for field in type_fields:
-            if field in raw_data:
-                message_type = raw_data[field]
-                break
-        
-        # Se não encontrou, assume texto
+        # 6. Determina tipo da mensagem (se ainda não definido)
         if not message_type:
-            message_type = "text"
+            type_fields = ["type", "messageType", "msgType"]
+            for field in type_fields:
+                if field in raw_data:
+                    message_type = raw_data[field]
+                    break
+            if not message_type:
+                message_type = "text"
             
         # Log detalhado para debug
         logger.info(f"📱 Análise completa:")
