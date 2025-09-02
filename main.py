@@ -6,10 +6,9 @@ from datetime import datetime
 from typing import Optional, Dict
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
 import logging
-import openai
 import os
+import openai
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -21,8 +20,8 @@ app = FastAPI()
 # Variáveis de ambiente
 WHATSAPP_PRODUCT_ID = os.getenv("WHATSAPP_PRODUCT_ID", "ID_PRODUTO_DEFAULT")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "ID_TELEFONE_DEFAULT")
-MAYTAPI_TOKEN = os.getenv("MAYTAPI_TOKEN", "TOKEN_DEFAULT")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
+
 if OPENAI_API_KEY:
     openai.api_key = OPENAI_API_KEY
 else:
@@ -44,8 +43,8 @@ class ClientProfile:
 
 class WhatsAppBotIntelligent:
     def __init__(self):
-        self.client_profiles = {}         # {phone: ClientProfile}
-        self.conversation_history = {}    # {phone: [{"role": "user"/"bot", "content": "mensagem"}]}
+        self.client_profiles = {}
+        self.conversation_history = {}
         self.analytics_data = {
             "clients_today": 0,
             "total_clients": 0,
@@ -56,7 +55,6 @@ class WhatsAppBotIntelligent:
         }
 
     async def send_message(self, phone: str, message: str):
-        """Envia mensagem com delay humanizado e atualiza histórico"""
         if phone not in self.conversation_history:
             self.conversation_history[phone] = []
         self.conversation_history[phone].append({"role": "bot", "content": message})
@@ -66,14 +64,12 @@ class WhatsAppBotIntelligent:
         profile = self.client_profiles[phone]
         profile.messages_count += 1
 
-        # Analytics
         self.analytics_data["attempts"] += 1
 
-        # Delay humanizado 5-10s
+        # Delay humanizado
         delay_seconds = random.randint(5, 10)
         await asyncio.sleep(delay_seconds)
 
-        # Log da mensagem
         logger.info(f"💬 [BOT -> {phone}]: {message}")
 
     def get_analytics(self):
@@ -89,17 +85,15 @@ class WhatsAppBotIntelligent:
 bot = WhatsAppBotIntelligent()
 
 # ------------------------------
-# Configurações de personalidade
+# Personalidade e respostas
 # ------------------------------
 BOT_PERSONALITY = {
     "name": "VitorBot",
     "age": 25,
     "style": "informal e amigável",
     "interests": ["tecnologia", "música", "cinema"],
-    "greetings": ["Oi! 😃", "Olá! Como vai?", "E aí, tudo bem?"],
 }
 
-# Respostas pré-definidas
 PREDEFINED_RESPONSES = [
     {"trigger": "oi", "responses": ["Oi! Tudo bem?", "Olá! Como vai você?"]},
     {"trigger": "quanto custa", "responses": ["O produto custa R$ 100.", "O valor é R$ 100, posso te passar o link."]},
@@ -107,47 +101,37 @@ PREDEFINED_RESPONSES = [
 ]
 
 # ------------------------------
-# Função principal de resposta
+# Função de processamento humanizado
 # ------------------------------
 async def process_incoming_message_humanized(phone, message):
     if not bot:
-        logger.warning("Bot não inicializado. Ignorando mensagem.")
         return
 
-    # Delay proporcional ao tamanho da mensagem (simula digitando)
+    # Delay proporcional ao tamanho da mensagem
     delay_seconds = random.randint(3, 5) + len(message)/20
     await asyncio.sleep(delay_seconds)
 
     message_lower = message.lower()
-    # Procura resposta pré-definida
     for entry in PREDEFINED_RESPONSES:
         if entry["trigger"] in message_lower:
             response = random.choice(entry["responses"])
             await bot.send_message(phone, response)
             return
 
-    # Se não encontrou, usa GPT
+    # GPT (nova API)
     if OPENAI_API_KEY:
         try:
-            # Histórico últimas 5 mensagens
             if phone not in bot.conversation_history:
                 bot.conversation_history[phone] = []
             bot.conversation_history[phone].append({"role": "user", "content": message})
             history_messages = bot.conversation_history[phone][-5:]
-            prompt_history = "\n".join([f"{m['role']}: {m['content']}" for m in history_messages])
-            
-            prompt = f"""
-Você é {BOT_PERSONALITY['name']}, {BOT_PERSONALITY['age']} anos.
-Estilo: {BOT_PERSONALITY['style']}.
-Interesses: {', '.join(BOT_PERSONALITY['interests'])}.
-Responda de forma natural e humana a mensagem abaixo, mantendo personalidade consistente:
+            messages_payload = [{"role": "system", "content": f"Você é {BOT_PERSONALITY['name']}, {BOT_PERSONALITY['age']} anos, estilo {BOT_PERSONALITY['style']}."}]
+            for m in history_messages:
+                messages_payload.append({"role": m["role"], "content": m["content"]})
 
-{prompt_history}
-Bot:
-"""
-            response = openai.ChatCompletion.create(
+            response = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages_payload,
                 max_tokens=200,
                 temperature=0.9,
                 presence_penalty=0.6,
@@ -170,21 +154,17 @@ async def receive_message(request: Request):
         raw_data = await request.json()
         logger.info(f"📨 Dados recebidos do webhook: {json.dumps(raw_data, indent=2)}")
 
-        # Ignora mensagens enviadas pelo bot
         from_me = raw_data.get("message", {}).get("fromMe", False)
         if from_me:
             return {"status": "ignored", "reason": "fromMe"}
 
-        # Ignora mensagens de status
         msg_type = raw_data.get("type") or raw_data.get("messageType") or "text"
         if msg_type in ["ack", "delivery", "read"]:
             return {"status": "ignored", "type": msg_type}
 
-        # Extrai sender
         sender = raw_data.get("from") or raw_data.get("fromNumber") or raw_data.get("user", {}).get("id")
         phone = sender
 
-        # Extrai mensagem
         message = None
         message_fields = ["text", "message", "body", "content"]
         for field in message_fields:
@@ -222,29 +202,13 @@ async def verify_webhook(request: Request):
 async def dashboard():
     analytics = bot.get_analytics() if bot else {}
     html = f"""
-<!DOCTYPE html>
 <html>
-<head>
-<title>🤖 Atendente Virtual - Dashboard</title>
-<meta charset="utf-8">
-<meta http-equiv="refresh" content="30">
-<style>
-body {{ font-family: Arial; margin: 40px; background: #f5f5f5; }}
-.card {{ background: white; padding: 20px; margin: 10px 0; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }}
-.metric {{ font-size: 24px; font-weight: bold; color: #2196F3; }}
-.status {{ font-size: 18px; margin: 10px 0; }}
-.success {{ color: #4CAF50; font-weight: bold; }}
-.debug {{ background: #f8f9fa; padding: 10px; border-left: 4px solid #007bff; margin: 10px 0; font-family: monospace; }}
-</style>
-</head>
+<head><title>🤖 Dashboard</title></head>
 <body>
-<h1>🤖 Atendente Virtual - Dashboard</h1>
-<div class="card">
-<div class="status success">✅ SISTEMA FUNCIONANDO</div>
-<p>Clientes hoje: <span class="metric">{analytics.get('clients_today', 0)}</span></p>
-<p>Total clientes: <span class="metric">{analytics.get('total_clients', 0)}</span></p>
-<p>Taxa conversão: <span class="metric">{analytics.get('conversion_rate', '0%')}</span></p>
-</div>
+<h1>🤖 Atendente Virtual</h1>
+<p>Clientes hoje: {analytics.get('clients_today', 0)}</p>
+<p>Total clientes: {analytics.get('total_clients', 0)}</p>
+<p>Taxa conversão: {analytics.get('conversion_rate', '0%')}</p>
 </body>
 </html>
 """
