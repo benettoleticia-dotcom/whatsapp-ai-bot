@@ -19,14 +19,21 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # Variáveis de ambiente (configurar no Render)
-WHATSAPP_PRODUCT_ID = os.getenv("WHATSAPP_PRODUCT_ID")
-WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
-MAYTAPI_TOKEN = os.getenv("MAYTAPI_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
+WHATSAPP_PRODUCT_ID = os.getenv("WHATSAPP_PRODUCT_ID", "ID_PRODUTO_DEFAULT")
+WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "ID_TELEFONE_DEFAULT")
+MAYTAPI_TOKEN = os.getenv("MAYTAPI_TOKEN", "TOKEN_DEFAULT")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
+if OPENAI_API_KEY:
+    openai.api_key = OPENAI_API_KEY
+else:
+    logger.warning("⚠️ OPENAI_API_KEY não definida, respostas GPT não funcionarão!")
 
 # Inicializa sistema do bot
-bot = WhatsAppBotIntelligent()
+try:
+    bot = WhatsAppBotIntelligent()
+except Exception as e:
+    logger.error(f"❌ Classe WhatsAppBotIntelligent não encontrada: {e}")
+    bot = None
 
 # Banco de respostas pré-definidas
 PREDEFINED_RESPONSES = [
@@ -51,6 +58,9 @@ async def process_incoming_message_humanized(phone, message):
     - Delay aleatório 5-10s
     - Resposta pré-definida ou GPT se não achar trigger
     """
+    if not bot:
+        logger.warning("Bot não inicializado. Ignorando mensagem.")
+        return
     delay_seconds = random.randint(5, 10)
     await asyncio.sleep(delay_seconds)
 
@@ -63,19 +73,22 @@ async def process_incoming_message_humanized(phone, message):
             return
 
     # Se não encontrou, gera resposta via GPT
-    try:
-        prompt = f"Responda a mensagem de forma natural e humana, como se fosse uma pessoa:\nMensagem: {message}\nResposta:"
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=150,
-            temperature=0.8
-        )
-        human_response = response.choices[0].message.content.strip()
-        await bot.send_message(phone, human_response)
-    except Exception as e:
-        await bot.send_message(phone, "Desculpe, não consegui processar sua mensagem agora 😅")
-        logger.error(f"Erro ao gerar resposta GPT: {e}")
+    if OPENAI_API_KEY:
+        try:
+            prompt = f"Responda a mensagem de forma natural e humana, como se fosse uma pessoa:\nMensagem: {message}\nResposta:"
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=150,
+                temperature=0.8
+            )
+            human_response = response.choices[0].message.content.strip()
+            await bot.send_message(phone, human_response)
+        except Exception as e:
+            await bot.send_message(phone, "Desculpe, não consegui processar sua mensagem agora 😅")
+            logger.error(f"Erro ao gerar resposta GPT: {e}")
+    else:
+        await bot.send_message(phone, "💡 Sem chave GPT. Apenas respostas pré-definidas disponíveis.")
 
 # Webhook POST
 @app.post("/webhook")
@@ -164,44 +177,42 @@ async def receive_message(request: Request):
 async def verify_webhook(request: Request):
     return {"status": "Webhook ativo", "timestamp": datetime.now(), "method": "GET"}
 
-# Dashboard
+# Dashboard completo
 @app.get("/")
 async def dashboard():
-    analytics = bot.get_analytics()
-    html = f"""<!DOCTYPE html><html><head>...</head><body>...</body></html>"""  # mantém HTML do dashboard original
-    return HTMLResponse(html)
-
-# Analytics JSON
-@app.get("/analytics")  
-async def get_analytics():
-    return bot.get_analytics()
-
-# Teste de mensagens com delay humanizado
-@app.get("/test-message")
-async def test_response(phone: str = "5542988388120", message: str = "oi"):
-    try:
-        clean_phone = re.sub(r"[^\d]", "", str(phone))
-        if not clean_phone.startswith("55"):
-            clean_phone = f"55{clean_phone}"
-        await process_incoming_message_humanized(clean_phone, message)
-        profile = bot.client_profiles.get(clean_phone)
-        return {
-            "success": True,
-            "message": message,
-            "profile": {
-                "stage": profile.conversation_stage.value if profile else "inicial",
-                "score": profile.conversion_score if profile else 0.0,
-                "messages": profile.messages_count if profile else 0
-            }
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-# Inicia servidor
-if __name__ == "__main__":
-    import uvicorn
-    print("="*60)
-    print("🤖 ATENDENTE VIRTUAL - VERSÃO HUMANIZADA")
-    print("="*60)
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-    
+    analytics = bot.get_analytics() if bot else {}
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>🤖 Atendente Virtual - Dashboard</title>
+        <meta charset="utf-8">
+        <meta http-equiv="refresh" content="30">
+        <style>
+            body {{ font-family: Arial; margin: 40px; background: #f5f5f5; }}
+            .card {{ background: white; padding: 20px; margin: 10px 0; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }}
+            .metric {{ font-size: 24px; font-weight: bold; color: #2196F3; }}
+            .status {{ font-size: 18px; margin: 10px 0; }}
+            .success {{ color: #4CAF50; font-weight: bold; }}
+            .debug {{ background: #f8f9fa; padding: 10px; border-left: 4px solid #007bff; margin: 10px 0; font-family: monospace; }}
+        </style>
+    </head>
+    <body>
+        <h1>🤖 Atendente Virtual - Dashboard</h1>
+        <div class="card">
+            <div class="status success">✅ SISTEMA FUNCIONANDO</div>
+            <h2>📊 Estatísticas Tempo Real</h2>
+            <p>Clientes hoje: <span class="metric">{analytics.get('clients_today', 0)}</span></p>
+            <p>Total clientes: <span class="metric">{analytics.get('total_clients', 0)}</span></p>
+            <p>Taxa conversão: <span class="metric">{analytics.get('conversion_rate', '0%')}</span></p>
+            <p>Status: <span class="success">{analytics.get('status', 'Loading...')}</span></p>
+        </div>
+        <div class="card">
+            <h2>🎯 Performance</h2>
+            <p>Links enviados: <span class="metric">{analytics.get('attempts', 0)}</span></p>
+            <p>Conversões: <span class="metric">{analytics.get('conversions', 0)}</span></p>
+        </div>
+        <div class="card">
+            <h2>🔧 Debug & Testes</h2>
+            <div class="debug">
+                <strong>Webhook URL:</strong> /webhook<br
