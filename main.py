@@ -479,23 +479,28 @@ class MaytapiWebhook(BaseModel):
 async def receive_message(request: Request):
     """Recebe mensagens do Maytapi - formato específico baseado nos logs"""
     try:
-        # Pega dados brutos da requisição
         raw_data = await request.json()
         logger.info(f"📨 Dados recebidos do webhook: {json.dumps(raw_data, indent=2)}")
         
-        # Extrai informações baseado no formato real do Maytapi (visto nos logs)
+        # Extrai o tipo da mensagem
+        msg_type = raw_data.get("type") or raw_data.get("messageType") or "text"
+        
+        # Ignora ack, delivery ou read
+        if msg_type in ["ack", "delivery", "read"]:
+            logger.info(f"ℹ️ Mensagem ignorada do tipo {msg_type}")
+            return {"status": "ignored", "type": msg_type}
+        
+        # Inicializa variáveis
         phone = None
         message = None
-        message_type = None
+        message_type = msg_type
         
-        # 1. Tenta extrair telefone de vários campos possíveis
+        # 1. Tenta extrair telefone
         phone_fields = ["phone", "fromNumber", "from", "receiver", "user"]
         for field in phone_fields:
             if field in raw_data and raw_data[field]:
                 phone = str(raw_data[field])
                 break
-        
-        # 2. Se não encontrou na raiz, procura em objetos aninhados
         if not phone:
             for key, value in raw_data.items():
                 if isinstance(value, dict):
@@ -506,8 +511,9 @@ async def receive_message(request: Request):
                     if phone:
                         break
         
-        # 3. Tenta extrair mensagem de vários campos possíveis
+        # 2. Tenta extrair mensagem
         message_fields = ["text", "message", "body", "content"]
+        # Na raiz
         for field in message_fields:
             if field in raw_data and raw_data[field]:
                 if isinstance(raw_data[field], str):
@@ -517,20 +523,14 @@ async def receive_message(request: Request):
                     message = raw_data[field]["text"]
                     message_type = raw_data[field].get("type", "text")
                     break
-        
-        # 4. Se não encontrou na raiz, procura em objetos aninhados (caso Maytapi)
+        # Objetos aninhados (caso Maytapi)
         if not message:
             for key, value in raw_data.items():
                 if isinstance(value, dict):
-                    # Caso especial: estrutura do Maytapi
-                    if key == "message":
-                        if "text" in value:
-                            message = value["text"]
-                        if "type" in value:
-                            message_type = value["type"]
+                    if key == "message" and "text" in value:
+                        message = value["text"]
+                        message_type = value.get("type", "text")
                         break
-                    
-                    # Outras estruturas possíveis
                     for msg_field in message_fields:
                         if msg_field in value and value[msg_field]:
                             if isinstance(value[msg_field], str):
@@ -538,8 +538,7 @@ async def receive_message(request: Request):
                                 break
                 if message:
                     break
-        
-        # 5. Procura por arrays de mensagens
+        # Arrays
         if not message:
             arrays_to_check = ["messages", "data", "items"]
             for array_name in arrays_to_check:
@@ -555,17 +554,7 @@ async def receive_message(request: Request):
                 if message:
                     break
         
-        # 6. Determina tipo da mensagem (se ainda não definido)
-        if not message_type:
-            type_fields = ["type", "messageType", "msgType"]
-            for field in type_fields:
-                if field in raw_data:
-                    message_type = raw_data[field]
-                    break
-            if not message_type:
-                message_type = "text"
-            
-        # Log detalhado para debug
+        # Log detalhado
         logger.info(f"📱 Análise completa:")
         logger.info(f"   - Phone extraído: {phone}")
         logger.info(f"   - Message extraída: {message}")
@@ -573,23 +562,18 @@ async def receive_message(request: Request):
         
         # Processa se temos dados válidos
         if phone and message and (message_type == "text" or "text" in str(message_type).lower()):
-            # Limpa o telefone - garante que tenha formato correto
+            # Limpeza do telefone
             clean_phone = re.sub(r'[^\d]', '', str(phone))
-            
-            # Se não tem código do país, adiciona 55 (Brasil)
             if len(clean_phone) == 11 and clean_phone.startswith('42'):
                 clean_phone = f"55{clean_phone}"
             elif len(clean_phone) == 10 and clean_phone.startswith('42'):
                 clean_phone = f"5542{clean_phone}"
             elif not clean_phone.startswith('55'):
                 clean_phone = f"55{clean_phone}"
-                
-            logger.info(f"📞 Telefone limpo: {clean_phone}")
             
-            # Processa a mensagem
+            logger.info(f"📞 Telefone limpo: {clean_phone}")
             await bot.process_incoming_message(clean_phone, str(message))
             logger.info(f"✅ Mensagem processada com sucesso para {clean_phone}")
-            
         else:
             logger.warning(f"⚠️ Dados insuficientes para processar:")
             logger.warning(f"   - Phone: {phone} (válido: {bool(phone)})")
@@ -597,12 +581,12 @@ async def receive_message(request: Request):
             logger.warning(f"   - Type: {message_type}")
             
         return {"status": "success", "received": True, "processed": bool(phone and message)}
-        
+    
     except Exception as e:
         logger.error(f"❌ Erro no webhook: {e}")
         logger.error(f"Raw data: {raw_data}")
-        # Retorna sucesso mesmo com erro para evitar reenvios do Maytapi
         return {"status": "error", "message": str(e), "received": True}
+
 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
@@ -610,9 +594,9 @@ async def verify_webhook(request: Request):
     logger.info(f"📋 Verificação webhook GET: {request.query_params}")
     return {"status": "Webhook ativo", "timestamp": datetime.now(), "method": "GET"}
 
+
 @app.get("/")
 async def dashboard():
-    """Dashboard principal"""
     analytics = bot.get_analytics()
     
     html = f"""
@@ -676,10 +660,12 @@ async def dashboard():
     
     return HTMLResponse(html)
 
+
 @app.get("/analytics")  
 async def get_analytics():
     """Analytics JSON"""
     return bot.get_analytics()
+
 
 @app.get("/test-message")
 async def test_response(phone: str = "5542988388120", message: str = "oi"):
@@ -700,6 +686,7 @@ async def test_response(phone: str = "5542988388120", message: str = "oi"):
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
 
 if __name__ == "__main__":
     import uvicorn
