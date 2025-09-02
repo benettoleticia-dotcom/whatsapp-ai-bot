@@ -215,4 +215,58 @@ async def dashboard():
         <div class="card">
             <h2>🔧 Debug & Testes</h2>
             <div class="debug">
-                <strong>Webhook URL:</strong> /webhook<br
+                <strong>Webhook URL:</strong> /webhook<br>
+                <strong>WhatsApp Number:</strong> +55 42 98838-8120<br>
+                <strong>Maytapi Product ID:</strong> {WHATSAPP_PRODUCT_ID}<br>
+                <strong>Phone ID:</strong> {WHATSAPP_PHONE_ID}
+            </div>
+            <p><a href="/test-message?phone=5542988388120&message=oi" target="_blank">🧪 Testar: "oi"</a></p>
+            <p><a href="/test-message?phone=5542988388120&message=tenho interesse" target="_blank">🧪 Testar: "tenho interesse"</a></p>
+            <p><a href="/test-message?phone=5542988388120&message=quanto custa" target="_blank">🧪 Testar: "quanto custa"</a></p>
+            <p><a href="/analytics" target="_blank">📊 Analytics JSON</a></p>
+        </div>
+        <div class="card">
+            <h2>📱 Como Testar no WhatsApp</h2>
+            <p>1. Mande mensagem para: <strong>+55 42 98838-8120</strong></p>
+            <p>2. Exemplo: "Oi tudo bem"</p>
+            <p>3. A IA deve responder automaticamente</p>
+            <p>4. Continue a conversa para testar o funil de vendas</p>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(html)
+
+# Analytics JSON
+@app.get("/analytics")  
+async def get_analytics():
+    return bot.get_analytics() if bot else {}
+
+# Teste de mensagens com delay humanizado
+@app.get("/test-message")
+async def test_response(phone: str = "5542988388120", message: str = "oi"):
+    try:
+        clean_phone = re.sub(r"[^\d]", "", str(phone))
+        if not clean_phone.startswith("55"):
+            clean_phone = f"55{clean_phone}"
+        await process_incoming_message_humanized(clean_phone, message)
+        profile = bot.client_profiles.get(clean_phone) if bot else None
+        return {
+            "success": True,
+            "message": message,
+            "profile": {
+                "stage": profile.conversation_stage.value if profile else "inicial",
+                "score": profile.conversion_score if profile else 0.0,
+                "messages": profile.messages_count if profile else 0
+            }
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# Inicia servidor
+if __name__ == "__main__":
+    import uvicorn
+    print("="*60)
+    print("🤖 ATENDENTE VIRTUAL - VERSÃO COMPLETA HUMANIZADA")
+    print("="*60)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
