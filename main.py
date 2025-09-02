@@ -14,14 +14,14 @@ logger = logging.getLogger("main")
 app = FastAPI()
 
 # Inicializa cliente OpenAI
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 if not OPENAI_API_KEY:
     logger.warning("⚠️ OPENAI_API_KEY não definida, respostas GPT não funcionarão!")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Configuração WhatsApp API (Maytapi ou similar)
-MAYTAPI_URL = os.getenv("MAYTAPI_URL")  # exemplo: https://api.maytapi.com/api/...
-MAYTAPI_TOKEN = os.getenv("MAYTAPI_TOKEN")
+MAYTAPI_URL = os.getenv("MAYTAPI_URL", "").strip()
+MAYTAPI_TOKEN = os.getenv("MAYTAPI_TOKEN", "").strip()
 
 # Armazena histórico por usuário (apenas últimas mensagens para reduzir custo)
 user_histories = {}
@@ -33,17 +33,12 @@ class WhatsAppBotIntelligent:
 
     async def get_gpt_response(self, user_id: str, user_message: str) -> str:
         try:
-            # Inicializa histórico se não existir
             if user_id not in user_histories:
                 user_histories[user_id] = []
 
-            # Adiciona mensagem do usuário no histórico
             user_histories[user_id].append({"role": "user", "content": user_message})
-
-            # Mantém apenas as últimas mensagens
             user_histories[user_id] = user_histories[user_id][-self.max_context_messages:]
 
-            # Prompt de "personalidade"
             system_prompt = {
                 "role": "system",
                 "content": (
@@ -53,17 +48,14 @@ class WhatsAppBotIntelligent:
                 ),
             }
 
-            # Chamada ao modelo GPT com limite de tokens e modelo econômico
             response = client.chat.completions.create(
-                model="gpt-4o-mini",  # modelo barato e rápido
+                model="gpt-4o-mini",
                 messages=[system_prompt] + user_histories[user_id],
                 max_tokens=300,
                 temperature=0.7,
             )
 
             reply = response.choices[0].message.content.strip()
-
-            # Adiciona resposta do bot ao histórico
             user_histories[user_id].append({"role": "assistant", "content": reply})
 
             return reply
@@ -80,9 +72,9 @@ class WhatsAppBotIntelligent:
         headers = {"Content-Type": "application/json", "x-maytapi-key": MAYTAPI_TOKEN}
         payload = {"to_number": to, "text": message, "type": "text"}
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient() as client_http:
             try:
-                response = await client.post(MAYTAPI_URL, headers=headers, json=payload)
+                response = await client_http.post(MAYTAPI_URL, headers=headers, json=payload)
                 logger.info(f"💬 [BOT -> {to}]: {message}")
                 return response.json()
             except Exception as e:
@@ -102,7 +94,6 @@ async def webhook_handler(request: Request):
     phone = user.get("phone")
     message_data = data.get("message", {})
 
-    # Valida mensagem recebida
     if not phone or not message_data or message_data.get("fromMe"):
         logger.warning("⚠️ Dados insuficientes ou mensagem do próprio bot, ignorando.")
         return {"status": "ignored"}
@@ -112,14 +103,9 @@ async def webhook_handler(request: Request):
         logger.warning("⚠️ Mensagem sem texto, ignorando.")
         return {"status": "ignored"}
 
-    # Gera resposta com GPT
     reply = await bot.get_gpt_response(phone, user_message)
-
-    # Simula delay humano (3s a 8s)
     delay = random.randint(3, 8)
     time.sleep(delay)
-
-    # Envia resposta pelo WhatsApp
     await bot.send_whatsapp_message(phone, reply)
 
     return {"status": "ok", "reply": reply}
