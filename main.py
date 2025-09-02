@@ -46,18 +46,23 @@ class MaytapiWebhook(BaseModel):
 
 # Função humanizada
 async def process_incoming_message_humanized(phone, message):
+    """
+    Processa a mensagem simulando comportamento humano:
+    - Delay aleatório 5-10s
+    - Resposta pré-definida ou GPT se não achar trigger
+    """
     delay_seconds = random.randint(5, 10)
     await asyncio.sleep(delay_seconds)
 
     message_lower = message.lower()
-    # 1️⃣ Procura resposta pré-definida
+    # Procura resposta pré-definida
     for entry in PREDEFINED_RESPONSES:
         if entry["trigger"] in message_lower:
             response = random.choice(entry["responses"])
             await bot.send_message(phone, response)
             return
 
-    # 2️⃣ Se não encontrou, gera resposta via GPT
+    # Se não encontrou, gera resposta via GPT
     try:
         prompt = f"Responda a mensagem de forma natural e humana, como se fosse uma pessoa:\nMensagem: {message}\nResposta:"
         response = openai.ChatCompletion.create(
@@ -79,6 +84,7 @@ async def receive_message(request: Request):
         raw_data = await request.json()
         logger.info(f"📨 Dados recebidos do webhook: {json.dumps(raw_data, indent=2)}")
 
+        # Ignora mensagens enviadas pelo próprio bot
         from_me = False
         if "message" in raw_data and isinstance(raw_data["message"], dict):
             from_me = raw_data["message"].get("fromMe", False)
@@ -86,18 +92,18 @@ async def receive_message(request: Request):
             logger.info("ℹ️ Mensagem enviada pelo bot, ignorando para evitar loop")
             return {"status": "ignored", "reason": "fromMe"}
 
+        # Ignora mensagens de status
         msg_type = raw_data.get("type") or raw_data.get("messageType") or "text"
         if msg_type in ["ack", "delivery", "read"]:
             logger.info(f"ℹ️ Mensagem ignorada do tipo {msg_type}")
             return {"status": "ignored", "type": msg_type}
 
+        # Extrai sender
         sender = raw_data.get("from") or raw_data.get("fromNumber") or raw_data.get("user", {}).get("id")
-        receiver = raw_data.get("to") or raw_data.get("receiver") or WHATSAPP_PHONE_ID
-
         phone = sender
-        message = None
-        message_type = msg_type
 
+        # Extrai mensagem
+        message = None
         message_fields = ["text", "message", "body", "content"]
         for field in message_fields:
             if field in raw_data and raw_data[field]:
@@ -106,19 +112,14 @@ async def receive_message(request: Request):
                     break
                 elif isinstance(raw_data[field], dict) and "text" in raw_data[field]:
                     message = raw_data[field]["text"]
-                    message_type = raw_data[field].get("type", "text")
                     break
         if not message:
             for key, value in raw_data.items():
                 if isinstance(value, dict):
-                    if key == "message" and "text" in value:
-                        message = value["text"]
-                        message_type = value.get("type", "text")
-                        break
                     for msg_field in message_fields:
                         if msg_field in value and value[msg_field]:
-                            if isinstance(value[msg_field], str):
-                                message = value[msg_field]
+                            message = value[msg_field] if isinstance(value[msg_field], str) else value[msg_field].get("text")
+                            if message:
                                 break
                 if message:
                     break
@@ -138,47 +139,36 @@ async def receive_message(request: Request):
                     break
 
         logger.info(f"📱 Análise completa:")
-        logger.info(f"   - Sender (cliente): {sender}")
-        logger.info(f"   - Receiver (bot): {receiver}")
-        logger.info(f"   - Message extraída: {message}")
-        logger.info(f"   - Type: {message_type}")
+        logger.info(f"   - Sender: {sender}")
+        logger.info(f"   - Message: {message}")
+        logger.info(f"   - Type: {msg_type}")
 
-        if phone and message and (message_type == "text" or "text" in str(message_type).lower()):
-            clean_phone = re.sub(r'[^\d]', '', str(phone))
-            if len(clean_phone) == 11 and clean_phone.startswith('42'):
+        if phone and message:
+            clean_phone = re.sub(r"[^\d]", "", str(phone))
+            if not clean_phone.startswith("55"):
                 clean_phone = f"55{clean_phone}"
-            elif len(clean_phone) == 10 and clean_phone.startswith('42'):
-                clean_phone = f"5542{clean_phone}"
-            elif not clean_phone.startswith('55'):
-                clean_phone = f"55{clean_phone}"
-
             logger.info(f"📞 Telefone limpo: {clean_phone}")
             await process_incoming_message_humanized(clean_phone, str(message))
             logger.info(f"✅ Mensagem processada com sucesso para {clean_phone}")
         else:
-            logger.warning(f"⚠️ Dados insuficientes para processar:")
-            logger.warning(f"   - Phone: {phone} (válido: {bool(phone)})")
-            logger.warning(f"   - Message: {message} (válido: {bool(message)})")
-            logger.warning(f"   - Type: {message_type}")
+            logger.warning("⚠️ Dados insuficientes para processar mensagem")
 
         return {"status": "success", "received": True, "processed": bool(phone and message)}
 
     except Exception as e:
         logger.error(f"❌ Erro no webhook: {e}")
-        logger.error(f"Raw data: {raw_data}")
         return {"status": "error", "message": str(e), "received": True}
 
 # Webhook GET
 @app.get("/webhook")
 async def verify_webhook(request: Request):
-    logger.info(f"📋 Verificação webhook GET: {request.query_params}")
     return {"status": "Webhook ativo", "timestamp": datetime.now(), "method": "GET"}
 
 # Dashboard
 @app.get("/")
 async def dashboard():
     analytics = bot.get_analytics()
-    html = f"""<!DOCTYPE html><html><head>...</head><body>...</body></html>"""  # mantém HTML existente
+    html = f"""<!DOCTYPE html><html><head>...</head><body>...</body></html>"""  # mantém HTML do dashboard original
     return HTMLResponse(html)
 
 # Analytics JSON
@@ -186,16 +176,18 @@ async def dashboard():
 async def get_analytics():
     return bot.get_analytics()
 
-# Teste de mensagens
+# Teste de mensagens com delay humanizado
 @app.get("/test-message")
 async def test_response(phone: str = "5542988388120", message: str = "oi"):
     try:
-        response = bot.generate_intelligent_response(phone, message)
-        profile = bot.client_profiles.get(phone)
+        clean_phone = re.sub(r"[^\d]", "", str(phone))
+        if not clean_phone.startswith("55"):
+            clean_phone = f"55{clean_phone}"
+        await process_incoming_message_humanized(clean_phone, message)
+        profile = bot.client_profiles.get(clean_phone)
         return {
             "success": True,
             "message": message,
-            "response": response,
             "profile": {
                 "stage": profile.conversation_stage.value if profile else "inicial",
                 "score": profile.conversion_score if profile else 0.0,
@@ -208,16 +200,7 @@ async def test_response(phone: str = "5542988388120", message: str = "oi"):
 # Inicia servidor
 if __name__ == "__main__":
     import uvicorn
-    print("=" * 60)
-    print("🤖 ATENDENTE VIRTUAL - VERSÃO GRATUITA")
-    print("=" * 60)
-    print("✅ SEM OpenAI - 100% GRÁTIS")
-    print("🧠 Lógica Inteligente Baseada nas Suas Técnicas")
-    print("📱 WhatsApp: +55 42 98838-8120")  
-    print("🎯 Taxa de Conversão Esperada: ~60%")
-    print("=" * 60)
-    print("🌐 Dashboard: http://localhost:8000")
-    print("🧪 Teste: http://localhost:8000/test-message")
-    print("=" * 60)
-    
+    print("="*60)
+    print("🤖 ATENDENTE VIRTUAL - VERSÃO HUMANIZADA")
+    print("="*60)
     uvicorn.run(app, host="0.0.0.0", port=8000)
