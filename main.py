@@ -1,101 +1,117 @@
 import os
 import logging
-import httpx
+import requests
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from openai import OpenAI
 
 # Configuração de logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-# Inicializa FastAPI
+# Inicializa o FastAPI
 app = FastAPI()
 
-# Variáveis de ambiente
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Carrega variáveis de ambiente
 MAYTAPI_TOKEN = os.getenv("MAYTAPI_TOKEN")
-MAYTAPI_BASE_URL = os.getenv("MAYTAPI_BASE_URL")  # Exemplo: https://api.maytapi.com/api/<product_id>/<phone_id>
+MAYTAPI_BASE_URL = os.getenv("MAYTAPI_BASE_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Configuração do cliente OpenAI
+if not MAYTAPI_TOKEN or not MAYTAPI_BASE_URL or not OPENAI_API_KEY:
+    logger.error("⚠️ Variáveis de ambiente ausentes. Verifique no Render!")
+    raise Exception("Variáveis de ambiente não configuradas corretamente.")
+
+# Inicializa o cliente OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-# Função para gerar resposta com GPT
-async def gerar_resposta(mensagem_usuario: str) -> str:
+# Função para enviar mensagem pelo WhatsApp via Maytapi
+def send_whatsapp_message(to: str, message: str):
     try:
-        resposta = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Você é um assistente educado e objetivo que responde mensagens de WhatsApp de forma clara e natural."},
-                {"role": "user", "content": mensagem_usuario}
-            ],
-            max_tokens=300,
-            temperature=0.7
-        )
-        conteudo = resposta.choices[0].message.content.strip()
-        return conteudo
-    except Exception as e:
-        logger.error(f"Erro ao gerar resposta GPT: {e}")
-        return "Desculpe, não consegui processar sua mensagem agora 😅"
-
-
-# Função para enviar mensagem pelo Maytapi
-async def enviar_mensagem(numero: str, texto: str):
-    try:
-        url = f"{MAYTAPI_BASE_URL}/sendMessage"
         payload = {
-            "to_number": numero,
+            "to_number": to,
             "type": "text",
-            "text": texto,
+            "message": message
         }
-        headers = {"x-maytapi-key": MAYTAPI_TOKEN}
+        headers = {
+            "x-maytapi-key": MAYTAPI_TOKEN,
+            "Content-Type": "application/json"
+        }
 
-        async with httpx.AsyncClient() as client_http:
-            response = await client_http.post(url, json=payload, headers=headers)
+        response = requests.post(MAYTAPI_BASE_URL, json=payload, headers=headers)
 
         if response.status_code == 200:
-            logger.info(f"💬 [BOT -> {numero}]: {texto}")
+            logger.info(f"💬 [BOT -> {to}]: {message}")
         else:
             logger.error(f"Erro ao enviar mensagem WhatsApp: {response.text}")
-
     except Exception as e:
-        logger.error(f"Erro inesperado ao enviar mensagem: {e}")
+        logger.error(f"Erro na função send_whatsapp_message: {e}")
 
 
-# Rota raiz
+# Função para gerar resposta com OpenAI
+def generate_openai_response(user_message: str) -> str:
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Você é um assistente útil que responde de forma simpática e clara."},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Erro ao gerar resposta com OpenAI: {e}")
+        return "Desculpe, ocorreu um erro ao processar sua mensagem. 😔"
+
+
+# Endpoint inicial para teste
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "🤖 Bot WhatsApp rodando com Maytapi + OpenAI"}
+    return {"status": "ok", "message": "🚀 Bot do WhatsApp está rodando!"}
 
 
-# Rota Webhook
+# Webhook para receber mensagens do WhatsApp
 @app.post("/webhook")
 async def webhook(request: Request):
-    data = await request.json()
-    logger.info(f"📨 Webhook recebido: {data}")
-
     try:
-        # Valida se é mensagem do usuário
-        if data.get("type") != "message":
-            logger.info(f"ℹ️ Webhook não é mensagem de usuário, ignorando: {data.get('type')}")
-            return {"status": "ignored"}
+        data = await request.json()
+        logger.info(f"📨 Webhook recebido: {data}")
 
-        msg = data.get("message", {})
-        texto_usuario = msg.get("text")
-        numero = data.get("user", {}).get("id")
+        # Extrai informações da mensagem
+        message = data.get("message", {})
+        message_type = message.get("type")
+        user = data.get("user", {})
+        user_id = user.get("id")
+        user_name = user.get("name")
 
-        if not texto_usuario or not numero:
+        if not user_id or not message_type:
             logger.warning("⚠️ Mensagem vazia ou número inválido.")
-            return {"status": "ignored"}
+            return JSONResponse(content={"status": "ignored"})
 
-        # Gera resposta com GPT
-        resposta = await gerar_resposta(texto_usuario)
+        # Só processa mensagens de texto
+        if message_type == "text":
+            user_text = message.get("text", "").strip()
 
-        # Envia resposta pelo Maytapi
-        await enviar_mensagem(numero, resposta)
+            if not user_text:
+                logger.warning("⚠️ Mensagem de texto vazia ignorada.")
+                return JSONResponse(content={"status": "ignored"})
 
-        return {"status": "success"}
+            logger.info(f"👤 {user_name} ({user_id}): {user_text}")
+
+            # Gera resposta com GPT
+            bot_reply = generate_openai_response(user_text)
+
+            # Envia resposta pelo WhatsApp
+            send_whatsapp_message(user_id, bot_reply)
+
+        else:
+            logger.info(f"📷 Mensagem ignorada (tipo: {message_type})")
+
+        return JSONResponse(content={"status": "success"})
 
     except Exception as e:
-        logger.error(f"Erro ao processar webhook: {e}")
-        return {"status": "error", "detail": str(e)}
+        logger.error(f"Erro ao processar mensagem: {e}")
+        return JSONResponse(content={"status": "error", "detail": str(e)})
+
