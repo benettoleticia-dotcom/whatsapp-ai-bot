@@ -1,70 +1,101 @@
 import os
+import logging
 import httpx
 from fastapi import FastAPI, Request
-import logging
-import openai
+from openai import OpenAI
 
+# Configuração de logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
+# Inicializa FastAPI
 app = FastAPI()
 
-# Pegando variáveis de ambiente
+# Variáveis de ambiente
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MAYTAPI_TOKEN = os.getenv("MAYTAPI_TOKEN")
-MAYTAPI_BASE_URL = os.getenv("MAYTAPI_BASE_URL")
+MAYTAPI_BASE_URL = os.getenv("MAYTAPI_BASE_URL")  # Exemplo: https://api.maytapi.com/api/<product_id>/<phone_id>
 
-openai.api_key = OPENAI_API_KEY
+# Configuração do cliente OpenAI
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-@app.post("/webhook")
-async def webhook(req: Request):
-    data = await req.json()
-    logger.info(f"📨 Webhook recebido: {data}")
 
-    message = data.get("message", {})
-    user = data.get("user", {})
-    msg_type = message.get("type")
-    text = message.get("text", "")
-    conversation = data.get("conversation")
-    reply_url = data.get("reply", MAYTAPI_BASE_URL)
-
-    # Ignora mensagens sem texto ou de nós mesmos
-    if not message or message.get("fromMe", False):
-        logger.warning("⚠️ Mensagem do próprio bot ou vazia, ignorando.")
-        return {"status": "ignored"}
-
-    # Limpeza de caracteres invisíveis
-    text = text.replace("\n", " ").strip()
-
+# Função para gerar resposta com GPT
+async def gerar_resposta(mensagem_usuario: str) -> str:
     try:
-        if msg_type == "text":
-            # Gera resposta GPT
-            response = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": text}],
-                max_tokens=200
-            )
-            reply_text = response.choices[0].message.content.strip()
+        resposta = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Você é um assistente educado e objetivo que responde mensagens de WhatsApp de forma clara e natural."},
+                {"role": "user", "content": mensagem_usuario}
+            ],
+            max_tokens=300,
+            temperature=0.7
+        )
+        conteudo = resposta.choices[0].message.content.strip()
+        return conteudo
+    except Exception as e:
+        logger.error(f"Erro ao gerar resposta GPT: {e}")
+        return "Desculpe, não consegui processar sua mensagem agora 😅"
 
-        elif msg_type == "image":
-            caption = message.get("caption", "")
-            caption = caption.replace("\n", " ").strip()
-            reply_text = f"Recebi sua imagem! {caption}" if caption else "Recebi sua imagem!"
 
+# Função para enviar mensagem pelo Maytapi
+async def enviar_mensagem(numero: str, texto: str):
+    try:
+        url = f"{MAYTAPI_BASE_URL}/sendMessage"
+        payload = {
+            "to_number": numero,
+            "type": "text",
+            "text": texto,
+        }
+        headers = {"x-maytapi-key": MAYTAPI_TOKEN}
+
+        async with httpx.AsyncClient() as client_http:
+            response = await client_http.post(url, json=payload, headers=headers)
+
+        if response.status_code == 200:
+            logger.info(f"💬 [BOT -> {numero}]: {texto}")
         else:
-            reply_text = "Desculpe, não consigo processar este tipo de mensagem no momento."
-
-        # Envia resposta via Maytapi
-        headers = {"Authorization": f"Bearer {MAYTAPI_TOKEN}"}
-        payload = {"text": reply_text, "to_number": conversation, "type": "text"}
-        async with httpx.AsyncClient() as client:
-            r = await client.post(reply_url, headers=headers, json=payload)
-            r.raise_for_status()
-
-        logger.info(f"💬 [BOT -> {conversation}]: {reply_text}")
+            logger.error(f"Erro ao enviar mensagem WhatsApp: {response.text}")
 
     except Exception as e:
-        logger.error(f"Erro ao processar mensagem: {e}")
-        reply_text = "Desculpe, não consegui processar sua mensagem agora 😅"
+        logger.error(f"Erro inesperado ao enviar mensagem: {e}")
 
-    return {"status": "ok"}
+
+# Rota raiz
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "🤖 Bot WhatsApp rodando com Maytapi + OpenAI"}
+
+
+# Rota Webhook
+@app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    logger.info(f"📨 Webhook recebido: {data}")
+
+    try:
+        # Valida se é mensagem do usuário
+        if data.get("type") != "message":
+            logger.info(f"ℹ️ Webhook não é mensagem de usuário, ignorando: {data.get('type')}")
+            return {"status": "ignored"}
+
+        msg = data.get("message", {})
+        texto_usuario = msg.get("text")
+        numero = data.get("user", {}).get("id")
+
+        if not texto_usuario or not numero:
+            logger.warning("⚠️ Mensagem vazia ou número inválido.")
+            return {"status": "ignored"}
+
+        # Gera resposta com GPT
+        resposta = await gerar_resposta(texto_usuario)
+
+        # Envia resposta pelo Maytapi
+        await enviar_mensagem(numero, resposta)
+
+        return {"status": "success"}
+
+    except Exception as e:
+        logger.error(f"Erro ao processar webhook: {e}")
+        return {"status": "error", "detail": str(e)}
