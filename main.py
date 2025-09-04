@@ -1,27 +1,8 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+# ADICIONAR AO MAIN.PY EXISTENTE
 
-import os
 import hashlib
 import hmac
-import random
-import re
-import json
 from datetime import datetime, timedelta
-import asyncio
-from telegram_client import send_telegram_message, start_telegram_client, stop_telegram_client, listen_for_messages
-
-import logging
-
-# Configuração de logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
-
-app = FastAPI()
-
-# ADICIONAR AO MAIN.PY EXISTENTE
 
 # CONFIGURAÇÃO DO SISTEMA DE ENTREGA
 class AutoDeliverySystem:
@@ -173,17 +154,17 @@ class AutoDeliverySystem:
             
             # 1. CONFIRMA PAGAMENTO
             confirmation_msg = random.choice(self.delivery_messages["payment_confirmed"])
-            await send_telegram_message(1076029751, confirmation_msg)
+            await ana_payment_bot.send_whatsapp_message(phone, confirmation_msg)
             await asyncio.sleep(3)
             
             # 2. MENSAGEM DE PREPARAÇÃO
             preparation_msg = random.choice(self.delivery_messages["content_delivery"])
-            await send_telegram_message(1076029751, preparation_msg)
+            await ana_payment_bot.send_whatsapp_message(phone, preparation_msg)
             await asyncio.sleep(5)
             
             # 3. MENSAGEM DE BOAS-VINDAS
             welcome_msg = package["welcome_message"]
-            await send_telegram_message(1076029751, welcome_msg)
+            await ana_payment_bot.send_whatsapp_message(phone, welcome_msg)
             await asyncio.sleep(3)
             
             # 4. ENTREGA DO CONTEÚDO (baseado no pacote)
@@ -196,10 +177,16 @@ class AutoDeliverySystem:
             
             # 5. INSTRUÇÕES FINAIS
             instructions = random.choice(self.delivery_messages["access_instructions"])
-            await send_telegram_message(1076029751, instructions)
+            await ana_payment_bot.send_whatsapp_message(phone, instructions)
             
             # 6. ATUALIZA STATUS DO CLIENTE
-
+            ana_payment_bot.memory.update_user_profile(phone,
+                converted=True,
+                conversion_stage='converted',
+                package_purchased=package_price,
+                content_delivered=True,
+                delivery_date=datetime.now()
+            )
             
             logger.info(f"✅ Conteúdo entregue com sucesso para {phone[-8:]}")
             return True
@@ -213,33 +200,33 @@ class AutoDeliverySystem:
         try:
             # FOTOS (envia em lotes de 5)
             if 'photos' in package and isinstance(package['photos'], list):
-                await send_telegram_message(1076029751, "📸 SUAS FOTOS EXCLUSIVAS:")
+                await ana_payment_bot.send_whatsapp_message(phone, "📸 SUAS FOTOS EXCLUSIVAS:")
                 await asyncio.sleep(2)
                 
                 photos = package['photos']
                 for i in range(0, len(photos), 5):  # Lotes de 5
                     batch = photos[i:i+5]
                     batch_text = f"Fotos {i+1}-{i+len(batch)}:\n" + "\n".join(batch)
-                    await send_telegram_message(1076029751, batch_text)
+                    await ana_payment_bot.send_whatsapp_message(phone, batch_text)
                     await asyncio.sleep(8)  # 8 segundos entre lotes
             
             # VÍDEOS (envia em lotes de 3)
             if 'videos' in package and isinstance(package['videos'], list):
-                await send_telegram_message(1076029751, "🎥 SEUS VÍDEOS QUENTES:")
+                await ana_payment_bot.send_whatsapp_message(phone, "🎥 SEUS VÍDEOS QUENTES:")
                 await asyncio.sleep(2)
                 
                 videos = package['videos']
                 for i in range(0, len(videos), 3):  # Lotes de 3
                     batch = videos[i:i+3]
                     batch_text = f"Vídeos {i+1}-{i+len(batch)}:\n" + "\n".join(batch)
-                    await send_telegram_message(1076029751, batch_text)
+                    await ana_payment_bot.send_whatsapp_message(phone, batch_text)
                     await asyncio.sleep(10)  # 10 segundos entre lotes
             
             # BÔNUS (se houver)
             if 'bonus' in package:
                 await asyncio.sleep(5)
-                await send_telegram_message(1076029751, "🎁 BÔNUS ESPECIAL:")
-                await send_telegram_message(1076029751, package['bonus'])
+                await ana_payment_bot.send_whatsapp_message(phone, "🎁 BÔNUS ESPECIAL:")
+                await ana_payment_bot.send_whatsapp_message(phone, package['bonus'])
             
         except Exception as e:
             logger.error(f"❌ Erro entrega padrão: {e}")
@@ -248,28 +235,28 @@ class AutoDeliverySystem:
         """Entrega conteúdo VIP (acesso completo + privilégios)"""
         try:
             # ACESSO COMPLETO ÀS PASTAS
-            await send_telegram_message(1076029751, "📂 ACESSO COMPLETO ÀS MINHAS PASTAS:")
+            await ana_payment_bot.send_whatsapp_message(phone, "📂 ACESSO COMPLETO ÀS MINHAS PASTAS:")
             await asyncio.sleep(2)
             
-            await send_telegram_message(1076029751, f"📸 Todas as fotos: {package['photos']}")
+            await ana_payment_bot.send_whatsapp_message(phone, f"📸 Todas as fotos: {package['photos']}")
             await asyncio.sleep(3)
             
-            await send_telegram_message(1076029751, f"🎥 Todos os vídeos: {package['videos']}")
+            await ana_payment_bot.send_whatsapp_message(phone, f"🎥 Todos os vídeos: {package['videos']}")
             await asyncio.sleep(3)
             
             # ACESSOS VIP
-            await send_telegram_message(1076029751, "👑 PRIVILÉGIOS VIP ATIVADOS:")
+            await ana_payment_bot.send_whatsapp_message(phone, "👑 PRIVILÉGIOS VIP ATIVADOS:")
             await asyncio.sleep(2)
             
-            await send_telegram_message(1076029751, f"💬 Grupo VIP: {package['vip_telegram']}")
+            await ana_payment_bot.send_whatsapp_message(phone, f"💬 Grupo VIP: {package['vip_telegram']}")
             await asyncio.sleep(3)
             
-            await send_telegram_message(1076029751, f"📞 WhatsApp Priority: {package['priority_whatsapp']}")
+            await ana_payment_bot.send_whatsapp_message(phone, f"📞 WhatsApp Priority: {package['priority_whatsapp']}")
             await asyncio.sleep(3)
             
             # CÓDIGO DE DESCONTO
-            await send_telegram_message(1076029751, f"🎫 Seu código de desconto: {package['discount_code']}")
-            await send_telegram_message(1076029751, "20% OFF em todos os encontros presenciais! 🔥")
+            await ana_payment_bot.send_whatsapp_message(phone, f"🎫 Seu código de desconto: {package['discount_code']}")
+            await ana_payment_bot.send_whatsapp_message(phone, "20% OFF em todos os encontros presenciais! 🔥")
             
         except Exception as e:
             logger.error(f"❌ Erro entrega VIP: {e}")
@@ -374,31 +361,22 @@ async def test_delivery(phone: str, package: float):
 async def delivery_dashboard():
     """Dashboard das entregas realizadas"""
     
-
-from telegram_client import send_telegram_message, start_telegram_client, stop_telegram_client
-import asyncio
-
-
-
-
-async def telegram_message_handler(message):
-    # Aqui você pode adicionar a lógica para processar as mensagens recebidas
-    print(f"Mensagem recebida de {message.sender_id}: {message.text}")
-    if message.text:
-        # Exemplo de resposta: ecoar a mensagem
-        await send_telegram_message(message.chat_id, f"Você disse: {message.text}")
-
-
-
-
-
-@app.on_event("startup")
-async def startup_event():
-    await start_telegram_client()
-    asyncio.create_task(listen_for_messages(telegram_message_handler))
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    await stop_telegram_client()
-
-
+    # Conta clientes convertidos
+    converted_users = [
+        user for user in ana_payment_bot.memory.user_data.values() 
+        if user.get('converted', False)
+    ]
+    
+    total_delivered = len(converted_users)
+    packages_delivered = {}
+    
+    for user in converted_users:
+        package = user.get('package_purchased', 0)
+        packages_delivered[package] = packages_delivered.get(package, 0) + 1
+    
+    return {
+        "total_deliveries": total_delivered,
+        "packages_breakdown": packages_delivered,
+        "system_status": "operational",
+        "available_packages": list(delivery_system.content_packages.keys())
+    }
